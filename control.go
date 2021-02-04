@@ -68,6 +68,9 @@ func (c *Control) RebindUDPServer() {
 
 	// Trigger a lighthouse update, useful for mobile clients that should have an update interval of 0
 	c.f.lightHouse.SendUpdate(c.f)
+
+	// Let the main interface know that we rebound so that underlying tunnels know to trigger punches from their remotes
+	c.f.rebindCount++
 }
 
 // ListHostmap returns details about the actual or pending (handshaking) hostmap

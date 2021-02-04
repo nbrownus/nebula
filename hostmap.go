@@ -51,6 +51,11 @@ type HostInfo struct {
 	recvError         int
 	remoteCidr        *CIDRTree
 
+	// lastRebindCount is the other side of Interface.rebindCount, if this is less than that we need to ask for LH for a
+	// punch from the remote end of this tunnel. The goal being to prime their conntrack for our traffic just like with
+	// a handshake
+	lastRebindCount   int8
+
 	lastRoam       time.Time
 	lastRoamRemote *udpAddr
 }
@@ -687,6 +692,13 @@ func (i *HostInfo) logger() *logrus.Entry {
 	}
 
 	return li
+}
+
+// rebindCheck checks our last rebind update to our lighthouses matches the one provided. If they do not, then
+func (i *HostInfo) rebindCheck(c int8) {
+	if i.lastRebindCount == c {
+		return
+	}
 }
 
 //########################
