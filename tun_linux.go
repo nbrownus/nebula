@@ -103,7 +103,6 @@ func newTun(deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, 
 	var req ifReq
 	req.Flags = uint16(cIFF_TUN | cIFF_NO_PI)
 	if multiqueue {
-		l.Error("SETTING MULTI")
 		req.Flags |= cIFF_MULTI_QUEUE
 	}
 	copy(req.Name[:], deviceName)

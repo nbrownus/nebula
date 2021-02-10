@@ -17,7 +17,7 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte, header *Header, fwPacket *FirewallPacket, lhh *LightHouseHandler, nb []byte, q int) {
+func (f *Interface) readOutsidePackets(addr *udpAddr, out []byte, packet []byte, header *Header, fwPacket *FirewallPacket, lhh *LightHouseHandler, nb []byte, q int8) {
 	err := header.Parse(packet)
 	if err != nil {
 		// TODO: best if we return this and let caller log
@@ -257,7 +257,7 @@ func (f *Interface) decrypt(hostinfo *HostInfo, mc uint64, out []byte, packet []
 	return out, nil
 }
 
-func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *FirewallPacket, nb []byte, q int) {
+func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out []byte, packet []byte, fwPacket *FirewallPacket, nb []byte, q int8) {
 	var err error
 
 	out, err = hostinfo.ConnectionState.dKey.DecryptDanger(out, packet[:HeaderLen], packet[HeaderLen:], messageCounter, nb)
@@ -281,7 +281,7 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 		return
 	}
 
-	dropReason := f.firewall.Drop(out, *fwPacket, true, hostinfo, trustedCAs)
+	dropReason, outQ := f.firewall.Drop(out, *fwPacket, true, hostinfo, trustedCAs, q)
 	if dropReason != nil {
 		if l.Level >= logrus.DebugLevel {
 			hostinfo.logger().WithField("fwPacket", fwPacket).
@@ -292,7 +292,8 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	}
 
 	f.connectionManager.In(hostinfo.hostId)
-	_, err = f.readers[q].Write(out)
+	l.Error("TUN WRITE TO ", outQ, hostinfo.remote)
+	_, err = f.readers[outQ].Write(out)
 	if err != nil {
 		l.WithError(err).Error("Failed to write to tun")
 	}

@@ -139,7 +139,7 @@ func (u *udpConn) LocalAddr() (*udpAddr, error) {
 	return addr, nil
 }
 
-func (u *udpConn) ListenOut(f *Interface, q int) {
+func (u *udpConn) ListenOut(f *Interface, q int8) {
 	plaintext := make([]byte, mtu)
 	header := &Header{}
 	fwPacket := &FirewallPacket{}

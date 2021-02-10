@@ -7,7 +7,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket, nb, out []byte, q int) {
+func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket, nb, out []byte, q int8) {
 	err := newPacket(packet, false, fwPacket)
 	if err != nil {
 		l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
@@ -52,9 +52,9 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *FirewallPacket,
 		ci.queueLock.Unlock()
 	}
 
-	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, trustedCAs)
+	dropReason, outQ := f.firewall.Drop(packet, *fwPacket, false, hostinfo, trustedCAs, q)
 	if dropReason == nil {
-		mc := f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out, q)
+		mc := f.sendNoMetrics(message, 0, ci, hostinfo, hostinfo.remote, packet, nb, out, outQ)
 		if f.lightHouse != nil && mc%5000 == 0 {
 			f.lightHouse.Query(fwPacket.RemoteIP, f)
 		}
@@ -129,7 +129,7 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 	}
 
 	// check if packet is in outbound fw rules
-	dropReason := f.firewall.Drop(p, *fp, false, hostInfo, trustedCAs)
+	dropReason, outQ := f.firewall.Drop(p, *fp, false, hostInfo, trustedCAs, -1)
 	if dropReason != nil {
 		if l.Level >= logrus.DebugLevel {
 			l.WithField("fwPacket", fp).
@@ -139,7 +139,7 @@ func (f *Interface) sendMessageNow(t NebulaMessageType, st NebulaMessageSubType,
 		return
 	}
 
-	f.sendNoMetrics(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, 0)
+	f.sendNoMetrics(message, st, hostInfo.ConnectionState, hostInfo, hostInfo.remote, p, nb, out, outQ)
 	if f.lightHouse != nil && *hostInfo.ConnectionState.messageCounter%5000 == 0 {
 		f.lightHouse.Query(fp.RemoteIP, f)
 	}
@@ -214,7 +214,7 @@ func (f *Interface) send(t NebulaMessageType, st NebulaMessageSubType, ci *Conne
 	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
 }
 
-func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte, q int) uint64 {
+func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udpAddr, p, nb, out []byte, q int8) uint64 {
 	if ci.eKey == nil {
 		//TODO: log warning
 		return 0
@@ -240,6 +240,7 @@ func (f *Interface) sendNoMetrics(t NebulaMessageType, st NebulaMessageSubType, 
 		return c
 	}
 
+	l.Error("UDP WRITE TO ", q, remote)
 	err = f.writers[q].WriteTo(out, remote)
 	if err != nil {
 		hostinfo.logger().WithError(err).

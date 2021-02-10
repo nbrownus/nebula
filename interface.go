@@ -127,13 +127,13 @@ func (f *Interface) run() {
 		Info("Nebula interface is active")
 
 	// Launch n queues to read packets from udp
-	for i := 0; i < f.udpQueues; i++ {
+	for i := int8(0); i < int8(f.udpQueues); i++ {
 		go f.listenOut(i)
 	}
 
 	// Launch n queues to read packets from tun dev
 	var reader io.ReadWriteCloser = f.inside
-	for i := 0; i < f.tunQueues; i++ {
+	for i := int8(0); i < int8(f.tunQueues); i++ {
 		if i > 0 {
 			reader, err = f.inside.NewMultiQueueReader()
 			if err != nil {
@@ -149,7 +149,7 @@ func (f *Interface) run() {
 	}
 }
 
-func (f *Interface) listenOut(i int) {
+func (f *Interface) listenOut(i int8) {
 	runtime.LockOSThread()
 
 	//TODO: handle error
@@ -173,7 +173,7 @@ func (f *Interface) listenOut(i int) {
 	li.ListenOut(f, i)
 }
 
-func (f *Interface) listenIn(reader io.ReadWriteCloser, i int) {
+func (f *Interface) listenIn(reader io.ReadWriteCloser, i int8) {
 	runtime.LockOSThread()
 
 	packet := make([]byte, mtu)

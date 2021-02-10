@@ -46,6 +46,8 @@ type conn struct {
 	// fields pack for free after the uint32 above
 	incoming     bool
 	rulesVersion uint16
+	tunQ         int8
+	udpQ		 int8
 }
 
 // TODO: need conntrack max tracked connections handling
@@ -370,29 +372,30 @@ var ErrInvalidRemoteIP = errors.New("remote IP is not in remote certificate subn
 var ErrInvalidLocalIP = errors.New("local IP is not in list of handled local IPs")
 var ErrNoMatchingRule = errors.New("no matching rule in firewall table")
 
-// Drop returns an error if the packet should be dropped, explaining why. It
-// returns nil if the packet should not be dropped.
-func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) error {
+// Drop returns an error if the packet should be dropped, explaining why.
+// If no error is returned then the packet can flow and the q will be the tun or udp queue to place the packet on
+// If an error is returned then the packet must not flow
+func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool, q int8) (error, int8) {
 	// Check if we spoke to this tuple, if we did then allow this packet
-	if f.inConns(packet, fp, incoming, h, caPool) {
-		return nil
+	if ok, retQ := f.inConns(packet, fp, incoming, h, caPool); ok {
+		return nil, retQ
 	}
 
 	// Make sure remote address matches nebula certificate
 	if remoteCidr := h.remoteCidr; remoteCidr != nil {
 		if remoteCidr.Contains(fp.RemoteIP) == nil {
-			return ErrInvalidRemoteIP
+			return ErrInvalidRemoteIP, 0
 		}
 	} else {
 		// Simple case: Certificate has one IP and no subnets
 		if fp.RemoteIP != h.hostId {
-			return ErrInvalidRemoteIP
+			return ErrInvalidRemoteIP, 0
 		}
 	}
 
 	// Make sure we are supposed to be handling this local ip address
 	if f.localIps.Contains(fp.LocalIP) == nil {
-		return ErrInvalidLocalIP
+		return ErrInvalidLocalIP, 0
 	}
 
 	table := f.OutRules
@@ -402,13 +405,11 @@ func (f *Firewall) Drop(packet []byte, fp FirewallPacket, incoming bool, h *Host
 
 	// We now know which firewall table to check against
 	if !table.match(fp, incoming, h.ConnectionState.peerCert, caPool) {
-		return ErrNoMatchingRule
+		return ErrNoMatchingRule, 0
 	}
 
 	// We always want to conntrack since it is a faster operation
-	f.addConn(packet, fp, incoming)
-
-	return nil
+	return nil, f.addConn(packet, fp, incoming, q)
 }
 
 // Destroy cleans up any known cyclical references so the object can be free'd my GC. This should be called if a new
@@ -426,7 +427,7 @@ func (f *Firewall) EmitStats() {
 	metrics.GetOrRegisterGauge("firewall.rules.version", nil).Update(int64(f.rulesVersion))
 }
 
-func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) bool {
+func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *HostInfo, caPool *cert.NebulaCAPool) (bool, int8) {
 	conntrack := f.Conntrack
 	conntrack.Lock()
 
@@ -440,7 +441,7 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 
 	if !ok {
 		conntrack.Unlock()
-		return false
+		return false, 0
 	}
 
 	if c.rulesVersion != f.rulesVersion {
@@ -463,7 +464,7 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 			}
 			delete(conntrack.Conns, fp)
 			conntrack.Unlock()
-			return false
+			return false, 0
 		}
 
 		if l.Level >= logrus.DebugLevel {
@@ -493,13 +494,21 @@ func (f *Firewall) inConns(packet []byte, fp FirewallPacket, incoming bool, h *H
 	}
 
 	conntrack.Unlock()
-
-	return true
+	var q int8
+	if incoming {
+		q = c.tunQ
+	} else {
+		q = c.udpQ
+	}
+	return true, q
 }
 
-func (f *Firewall) addConn(packet []byte, fp FirewallPacket, incoming bool) {
+func (f *Firewall) addConn(packet []byte, fp FirewallPacket, incoming bool, q int8) int8 {
 	var timeout time.Duration
-	c := &conn{}
+	c := &conn{
+		tunQ: 0,
+		udpQ: 0,
+	}
 
 	switch fp.Protocol {
 	case fwProtoTCP:
@@ -524,8 +533,19 @@ func (f *Firewall) addConn(packet []byte, fp FirewallPacket, incoming bool) {
 	c.incoming = incoming
 	c.rulesVersion = f.rulesVersion
 	c.Expires = time.Now().Add(timeout)
+
+	var retQ int8
+	if incoming {
+		c.udpQ = q
+		retQ = c.tunQ
+	} else {
+		c.tunQ = q
+		retQ = c.udpQ
+	}
+
 	conntrack.Conns[fp] = c
 	conntrack.Unlock()
+	return retQ
 }
 
 // Evict checks if a conntrack entry has expired, if so it is removed, if not it is re-added to the wheel
