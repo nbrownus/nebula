@@ -3,7 +3,6 @@ package nebula
 import (
 	"errors"
 	"fmt"
-	"net"
 	"sync"
 	"time"
 
@@ -223,17 +222,13 @@ type ip4Or6 struct {
 	v6 Ip6AndPort
 }
 
-func NewIpAndPort(ip net.IP, port uint32) ip4Or6 {
+func NewIpAndPort(ip IP, port uint32) ip4Or6 {
 	ipp := ip4Or6{}
 
-	if ipv4 := ip.To4(); ipv4 != nil {
-		ipp.v4 = IpAndPort{Port: port}
-		ipp.v4.Ip = ip2int(ip)
-
+	if ipv4, isV4 := ip.ToV4(); isV4 {
+		ipp.v4 = IpAndPort{Ip: ip2int(ipv4), Port: port}
 	} else {
-		ipp.v6 = Ip6AndPort{Port: port}
-		ipp.v6.Ip = make([]byte, len(ip))
-		copy(ipp.v6.Ip, ip)
+		ipp.v6 = Ip6AndPort{Ip: ip[:], Port: port}
 	}
 
 	return ipp
@@ -244,15 +239,11 @@ func NewIpAndPortFromUDPAddr(addr *udpAddr) ip4Or6 {
 }
 
 func NewUDPAddrFromLH4(ipp *IpAndPort) *udpAddr {
-	ip := ipp.Ip
-	return NewUDPAddr(
-		net.IPv4(byte(ip&0xff000000>>24), byte(ip&0x00ff0000>>16), byte(ip&0x0000ff00>>8), byte(ip&0x000000ff)),
-		uint16(ipp.Port),
-	)
+	return NewUDPAddrFromUint32(ipp.Ip, uint16(ipp.Port))
 }
 
 func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udpAddr {
-	return NewUDPAddr(ipp.Ip, uint16(ipp.Port))
+	return NewUDPAddrFromSlice(ipp.Ip, uint16(ipp.Port))
 }
 
 func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
@@ -273,7 +264,7 @@ func (lh *LightHouse) SendUpdate(f EncWriter) {
 	for _, e := range *localIps(lh.localAllowList) {
 		// Only add IPs that aren't my VPN/tun IP
 		if ip2int(e) != lh.myIp {
-			ipp := NewIpAndPort(e, lh.nebulaPort)
+			ipp := NewIpAndPort(NewIPFromNetIP(e), lh.nebulaPort)
 			if len(ipp.v6.Ip) > 0 {
 				v6 = append(v6, &ipp.v6)
 			} else {

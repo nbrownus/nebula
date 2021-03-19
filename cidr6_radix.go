@@ -20,12 +20,13 @@ func NewCIDR6Tree() *CIDR6Tree {
 func (tree *CIDR6Tree) AddCIDR(cidr *net.IPNet, val interface{}) {
 	var node, next *CIDRNode
 
-	cidrIP, ipv4 := isIPV4(cidr.IP)
-	if ipv4 {
+	cidrIP := cidr.IP.To4()
+	if cidrIP != nil {
 		node = tree.root4
 		next = tree.root4
 
 	} else {
+		cidrIP = cidr.IP
 		node = tree.root6
 		next = tree.root6
 	}
@@ -72,11 +73,11 @@ func (tree *CIDR6Tree) AddCIDR(cidr *net.IPNet, val interface{}) {
 }
 
 // Finds the first match, which may be the least specific
-func (tree *CIDR6Tree) Contains(ip net.IP) (value interface{}) {
+func (tree *CIDR6Tree) Contains(ip IP) (value interface{}) {
 	var node *CIDRNode
 
-	wholeIP, ipv4 := isIPV4(ip)
-	if ipv4 {
+	wholeIP, isV4 := ip.ToV4()
+	if isV4 {
 		node = tree.root4
 	} else {
 		node = tree.root6
@@ -111,11 +112,11 @@ func (tree *CIDR6Tree) Contains(ip net.IP) (value interface{}) {
 }
 
 // Finds the most specific match
-func (tree *CIDR6Tree) MostSpecificContains(ip net.IP) (value interface{}) {
+func (tree *CIDR6Tree) MostSpecificContains(ip IP) (value interface{}) {
 	var node *CIDRNode
 
-	wholeIP, ipv4 := isIPV4(ip)
-	if ipv4 {
+	wholeIP, isV4 := ip.ToV4()
+	if isV4 {
 		node = tree.root4
 	} else {
 		node = tree.root6
@@ -148,12 +149,12 @@ func (tree *CIDR6Tree) MostSpecificContains(ip net.IP) (value interface{}) {
 }
 
 // Finds the most specific match
-func (tree *CIDR6Tree) Match(ip net.IP) (value interface{}) {
+func (tree *CIDR6Tree) Match(ip IP) (value interface{}) {
 	var node *CIDRNode
 	var bit uint32
 
-	wholeIP, ipv4 := isIPV4(ip)
-	if ipv4 {
+	wholeIP, isV4 := ip.ToV4()
+	if isV4 {
 		node = tree.root4
 	} else {
 		node = tree.root6
@@ -179,25 +180,4 @@ func (tree *CIDR6Tree) Match(ip net.IP) (value interface{}) {
 	}
 
 	return value
-}
-
-func isIPV4(ip net.IP) (net.IP, bool) {
-	if len(ip) == net.IPv4len {
-		return ip, true
-	}
-
-	if len(ip) == net.IPv6len && isZeros(ip[0:10]) && ip[10] == 0xff && ip[11] == 0xff {
-		return ip[12:16], true
-	}
-
-	return ip, false
-}
-
-func isZeros(p net.IP) bool {
-	for i := 0; i < len(p); i++ {
-		if p[i] != 0 {
-			return false
-		}
-	}
-	return true
 }

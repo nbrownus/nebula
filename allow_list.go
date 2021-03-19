@@ -2,7 +2,6 @@ package nebula
 
 import (
 	"fmt"
-	"net"
 	"regexp"
 )
 
@@ -19,7 +18,7 @@ type AllowListNameRule struct {
 	Allow bool
 }
 
-func (al *AllowList) Allow(ip net.IP) bool {
+func (al *AllowList) Allow(ip IP) bool {
 	if al == nil {
 		return true
 	}

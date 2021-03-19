@@ -28,7 +28,7 @@ func NewListener(ip string, port int, multi bool) (*udpConn, error) {
 }
 
 func (uc *udpConn) WriteTo(b []byte, addr *udpAddr) error {
-	_, err := uc.UDPConn.WriteToUDP(b, &net.UDPAddr{IP: addr.IP, Port: int(addr.Port)})
+	_, err := uc.UDPConn.WriteToUDP(b, &net.UDPAddr{IP: addr.IP.ToNetIP(), Port: int(addr.Port)})
 	return err
 }
 
@@ -37,11 +37,7 @@ func (uc *udpConn) LocalAddr() (*udpAddr, error) {
 
 	switch v := a.(type) {
 	case *net.UDPAddr:
-		addr := &udpAddr{IP: make([]byte, len(v.IP))}
-		copy(addr.IP, v.IP)
-		addr.Port = uint16(v.Port)
-		return addr, nil
-
+		return NewUDPAddr(NewIPFromNetIP(v.IP), uint16(v.Port)), nil
 	default:
 		return nil, fmt.Errorf("LocalAddr returned: %#v", a)
 	}
@@ -65,7 +61,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 	buffer := make([]byte, mtu)
 	header := &Header{}
 	fwPacket := &FirewallPacket{}
-	udpAddr := &udpAddr{IP: make([]byte, 16)}
+	udpAddr := &udpAddr{}
 	nb := make([]byte, 12, 12)
 
 	lhh := f.lightHouse.NewRequestHandler()
@@ -80,7 +76,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 			continue
 		}
 
-		udpAddr.IP = rua.IP
+		udpAddr.IP = NewIPFromNetIP(rua.IP)
 		udpAddr.Port = uint16(rua.Port)
 		f.readOutsidePackets(udpAddr, plaintext[:0], buffer[:n], header, fwPacket, lhh, nb, q, conntrackCache.Get())
 	}

@@ -476,7 +476,7 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		// return early if we are already on a preferred remote
 		rIP := i.remote.IP
 		for _, l := range preferredRanges {
-			if l.Contains(rIP) {
+			if l.Contains(rIP.ToNetIP()) {
 				return
 			}
 		}
@@ -510,12 +510,12 @@ func (i *HostInfo) getBestRemote(preferredRanges []*net.IPNet) (best *udpAddr, p
 			rIP := r.addr.IP
 
 			for _, l := range preferredRanges {
-				if l.Contains(rIP) {
+				if l.Contains(rIP.ToNetIP()) {
 					return r.addr, true
 				}
 			}
 
-			if best == nil || !PrivateIP(rIP) {
+			if best == nil || !PrivateIP(rIP.ToNetIP()) {
 				best = r.addr
 			}
 			/*
@@ -821,7 +821,7 @@ func localIps(allowList *AllowList) *[]net.IP {
 			//TODO: Filtering out link local for now, this is probably the most correct thing
 			//TODO: Would be nice to filter out SLAAC MAC based ips as well
 			if ip.IsLoopback() == false && !ip.IsLinkLocalUnicast() {
-				allow := allowList.Allow(ip)
+				allow := allowList.Allow(NewIPFromNetIP(ip))
 				l.WithField("localIp", ip).WithField("allow", allow).Debug("localAllowList.Allow")
 				if !allow {
 					continue

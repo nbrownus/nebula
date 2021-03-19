@@ -112,17 +112,23 @@ func (u *udpConn) LocalAddr() (*udpAddr, error) {
 	if rsa.Addr.Family == unix.AF_INET {
 		pp := (*unix.RawSockaddrInet4)(unsafe.Pointer(&rsa))
 		addr.Port = uint16(rsa.Addr.Data[0])<<8 + uint16(rsa.Addr.Data[1])
-		copy(addr.IP, pp.Addr[:])
+		for i := 0; i < 12; i++ {
+			addr.IP[i] = 0
+		}
+		addr.IP[12] = pp.Addr[0]
+		addr.IP[13] = pp.Addr[1]
+		addr.IP[14] = pp.Addr[2]
+		addr.IP[15] = pp.Addr[3]
 
 	} else if rsa.Addr.Family == unix.AF_INET6 {
 		//TODO: this cast sucks and we can do better
 		pp := (*unix.RawSockaddrInet6)(unsafe.Pointer(&rsa))
 		addr.Port = uint16(rsa.Addr.Data[0])<<8 + uint16(rsa.Addr.Data[1])
-		copy(addr.IP, pp.Addr[:])
+		addr.IP = pp.Addr
 
 	} else {
 		addr.Port = 0
-		addr.IP = []byte{}
+		addr.IP = IP{}
 	}
 
 	//TODO: Just use this instead?
@@ -159,7 +165,7 @@ func (u *udpConn) ListenOut(f *Interface, q int) {
 
 		//metric.Update(int64(n))
 		for i := 0; i < n; i++ {
-			udpAddr.IP = names[i][8:24]
+			copy(udpAddr.IP[:], names[i][8:24])
 			udpAddr.Port = binary.BigEndian.Uint16(names[i][2:4])
 			f.readOutsidePackets(udpAddr, plaintext[:0], buffers[i][:msgs[i].Len], header, fwPacket, lhh, nb, q, conntrackCache.Get())
 		}
@@ -214,7 +220,7 @@ func (u *udpConn) WriteTo(b []byte, addr *udpAddr) error {
 	p := (*[2]byte)(unsafe.Pointer(&rsa.Port))
 	p[0] = byte(addr.Port >> 8)
 	p[1] = byte(addr.Port)
-	copy(rsa.Addr[:], addr.IP)
+	rsa.Addr = addr.IP
 
 	for {
 		_, _, err := unix.Syscall6(
