@@ -149,7 +149,7 @@ func (tree *CIDR6Tree) MostSpecificContains(ip net.IP) (value interface{}) {
 	return value
 }
 
-func (tree *CIDR6Tree) MostSpecificContainsLH4(addr *Ip4AndPort) (value interface{}) {
+func (tree *CIDR6Tree) MostSpecificContainsLH4(addr Ip4AndPort) (value interface{}) {
 	bit := startbit
 	node := tree.root4
 
@@ -170,7 +170,7 @@ func (tree *CIDR6Tree) MostSpecificContainsLH4(addr *Ip4AndPort) (value interfac
 	return value
 }
 
-func (tree *CIDR6Tree) MostSpecificContainsLH6(addr *Ip6AndPort) (value interface{}) {
+func (tree *CIDR6Tree) MostSpecificContainsLH6(addr Ip6AndPort) (value interface{}) {
 	ip := addr.Hi
 	node := tree.root6
 

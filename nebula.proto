@@ -1,6 +1,8 @@
 syntax = "proto3";
 package nebula;
 
+import "gogo.proto";
+
 message NebulaMeta {
   enum MessageType {
     None = 0;
@@ -22,8 +24,8 @@ message NebulaMeta {
 
 message NebulaMetaDetails {
   uint32 VpnIp = 1;
-  repeated Ip4AndPort Ip4AndPorts = 2;
-  repeated Ip6AndPort Ip6AndPorts = 4;
+  repeated Ip4AndPort Ip4AndPorts = 2 [(gogoproto.nullable) = false];
+  repeated Ip6AndPort Ip6AndPorts = 4  [(gogoproto.nullable) = false];
   uint32 counter = 3;
 }
 

@@ -26,12 +26,12 @@ type ip4And6 struct {
 	//TODO: adding a lock here could allow us to release the lock on lh.addrMap quicker
 
 	// v4 and v6 store addresses that have been self reported by the client
-	v4 []*Ip4AndPort
-	v6 []*Ip6AndPort
+	v4 []Ip4AndPort
+	v6 []Ip6AndPort
 
 	// Learned addresses are ones that a client does not know about but a lighthouse learned from as a result of the received packet
-	learnedV4 []*Ip4AndPort
-	learnedV6 []*Ip6AndPort
+	learnedV4 []Ip4AndPort
+	learnedV6 []Ip6AndPort
 }
 
 type LightHouse struct {
@@ -224,10 +224,10 @@ func (lh *LightHouse) unsafeGetAddrs(vpnIP uint32) *ip4And6 {
 	am, ok := lh.addrMap[vpnIP]
 	if !ok {
 		am = &ip4And6{
-			v4:        make([]*Ip4AndPort, 0),
-			v6:        make([]*Ip6AndPort, 0),
-			learnedV4: make([]*Ip4AndPort, 0),
-			learnedV6: make([]*Ip6AndPort, 0),
+			v4:        make([]Ip4AndPort, 0),
+			v6:        make([]Ip6AndPort, 0),
+			learnedV4: make([]Ip4AndPort, 0),
+			learnedV6: make([]Ip6AndPort, 0),
 		}
 		lh.addrMap[vpnIP] = am
 	}
@@ -235,7 +235,7 @@ func (lh *LightHouse) unsafeGetAddrs(vpnIP uint32) *ip4And6 {
 }
 
 // addRemoteV4 is a lighthouse internal method that prepends a remote if it is allowed by the allow list and not duplicated
-func (lh *LightHouse) addRemoteV4(vpnIP uint32, to *Ip4AndPort, static bool, learned bool) {
+func (lh *LightHouse) addRemoteV4(vpnIP uint32, to Ip4AndPort, static bool, learned bool) {
 	// First we check if the sender thinks this is a static entry
 	// and do nothing if it is not, but should be considered static
 	if static == false {
@@ -261,8 +261,8 @@ func (lh *LightHouse) addRemoteV4(vpnIP uint32, to *Ip4AndPort, static bool, lea
 	}
 }
 
-func prependAndLimitV4(cache []*Ip4AndPort, to *Ip4AndPort) []*Ip4AndPort {
-	cache = append(cache, nil)
+func prependAndLimitV4(cache []Ip4AndPort, to Ip4AndPort) []Ip4AndPort {
+	cache = append(cache, Ip4AndPort{})
 	copy(cache[1:], cache)
 	cache[0] = to
 	if len(cache) > MaxRemotes {
@@ -272,7 +272,7 @@ func prependAndLimitV4(cache []*Ip4AndPort, to *Ip4AndPort) []*Ip4AndPort {
 }
 
 // unlockedShouldAddV4 checks if to is allowed by our allow list and is not already present in the cache
-func (lh *LightHouse) unlockedShouldAddV4(am []*Ip4AndPort, to *Ip4AndPort) bool {
+func (lh *LightHouse) unlockedShouldAddV4(am []Ip4AndPort, to Ip4AndPort) bool {
 	allow := lh.remoteAllowList.AllowLH4(to)
 	if lh.l.Level >= logrus.DebugLevel {
 		lh.l.WithField("remoteIp", IntIp(to.Ip)).WithField("allow", allow).Debug("remoteAllowList.Allow")
@@ -292,7 +292,7 @@ func (lh *LightHouse) unlockedShouldAddV4(am []*Ip4AndPort, to *Ip4AndPort) bool
 }
 
 // addRemoteV6 is a lighthouse internal method that prepends a remote if it is allowed by the allow list and not duplicated
-func (lh *LightHouse) addRemoteV6(vpnIP uint32, to *Ip6AndPort, static bool, learned bool) {
+func (lh *LightHouse) addRemoteV6(vpnIP uint32, to Ip6AndPort, static bool, learned bool) {
 	// First we check if the sender thinks this is a static entry
 	// and do nothing if it is not, but should be considered static
 	if static == false {
@@ -318,8 +318,8 @@ func (lh *LightHouse) addRemoteV6(vpnIP uint32, to *Ip6AndPort, static bool, lea
 	}
 }
 
-func prependAndLimitV6(cache []*Ip6AndPort, to *Ip6AndPort) []*Ip6AndPort {
-	cache = append(cache, nil)
+func prependAndLimitV6(cache []Ip6AndPort, to Ip6AndPort) []Ip6AndPort {
+	cache = append(cache, Ip6AndPort{})
 	copy(cache[1:], cache)
 	cache[0] = to
 	if len(cache) > MaxRemotes {
@@ -329,7 +329,7 @@ func prependAndLimitV6(cache []*Ip6AndPort, to *Ip6AndPort) []*Ip6AndPort {
 }
 
 // unlockedShouldAddV6 checks if to is allowed by our allow list and is not already present in the cache
-func (lh *LightHouse) unlockedShouldAddV6(am []*Ip6AndPort, to *Ip6AndPort) bool {
+func (lh *LightHouse) unlockedShouldAddV6(am []Ip6AndPort, to Ip6AndPort) bool {
 	allow := lh.remoteAllowList.AllowLH6(to)
 	if lh.l.Level >= logrus.DebugLevel {
 		lh.l.WithField("remoteIp", lhIp6ToIp(to)).WithField("allow", allow).Debug("remoteAllowList.Allow")
@@ -348,7 +348,7 @@ func (lh *LightHouse) unlockedShouldAddV6(am []*Ip6AndPort, to *Ip6AndPort) bool
 	return true
 }
 
-func lhIp6ToIp(v *Ip6AndPort) net.IP {
+func lhIp6ToIp(v Ip6AndPort) net.IP {
 	ip := make(net.IP, 16)
 	binary.BigEndian.PutUint64(ip[:8], v.Hi)
 	binary.BigEndian.PutUint64(ip[8:], v.Lo)
@@ -378,21 +378,19 @@ func NewLhQueryByInt(VpnIp uint32) *NebulaMeta {
 	}
 }
 
-func NewIp4AndPort(ip net.IP, port uint32) *Ip4AndPort {
-	ipp := Ip4AndPort{Port: port}
-	ipp.Ip = ip2int(ip)
-	return &ipp
+func NewIp4AndPort(ip net.IP, port uint32) Ip4AndPort {
+	return Ip4AndPort{Ip: ip2int(ip), Port: port}
 }
 
-func NewIp6AndPort(ip net.IP, port uint32) *Ip6AndPort {
-	return &Ip6AndPort{
+func NewIp6AndPort(ip net.IP, port uint32) Ip6AndPort {
+	return Ip6AndPort{
 		Hi:   binary.BigEndian.Uint64(ip[:8]),
 		Lo:   binary.BigEndian.Uint64(ip[8:]),
 		Port: port,
 	}
 }
 
-func NewUDPAddrFromLH4(ipp *Ip4AndPort) *udpAddr {
+func NewUDPAddrFromLH4(ipp Ip4AndPort) *udpAddr {
 	ip := ipp.Ip
 	return NewUDPAddr(
 		net.IPv4(byte(ip&0xff000000>>24), byte(ip&0x00ff0000>>16), byte(ip&0x0000ff00>>8), byte(ip&0x000000ff)),
@@ -400,7 +398,7 @@ func NewUDPAddrFromLH4(ipp *Ip4AndPort) *udpAddr {
 	)
 }
 
-func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udpAddr {
+func NewUDPAddrFromLH6(ipp Ip6AndPort) *udpAddr {
 	return NewUDPAddr(lhIp6ToIp(ipp), uint16(ipp.Port))
 }
 
@@ -416,8 +414,8 @@ func (lh *LightHouse) LhUpdateWorker(f EncWriter) {
 }
 
 func (lh *LightHouse) SendUpdate(f EncWriter) {
-	var v4 []*Ip4AndPort
-	var v6 []*Ip6AndPort
+	var v4 []Ip4AndPort
+	var v6 []Ip6AndPort
 
 	for _, e := range *localIps(lh.l, lh.localAllowList) {
 		if ip4 := e.To4(); ip4 != nil && ipMaskContains(lh.myVpnIp, lh.myVpnOnes, ip2int(ip4)) {
@@ -494,8 +492,8 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	lhh.meta.Reset()
 
 	// Keep the array memory around
-	details.Ip4AndPorts = details.Ip4AndPorts[:0]
-	details.Ip6AndPorts = details.Ip6AndPorts[:0]
+	//details.Ip4AndPorts = details.Ip4AndPorts[:0]
+	//details.Ip6AndPorts = details.Ip6AndPorts[:0]
 	lhh.meta.Details = details
 
 	return lhh.meta
@@ -597,11 +595,39 @@ func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp uint32, addr 
 }
 
 func (lhh *LightHouseHandler) coalesceAnswers(cache *ip4And6, n *NebulaMeta) {
-	n.Details.Ip4AndPorts = append(n.Details.Ip4AndPorts, cache.v4...)
-	n.Details.Ip4AndPorts = append(n.Details.Ip4AndPorts, cache.learnedV4...)
+	l := len(cache.learnedV4) + len(cache.v4)
+	n.Details.v4Counter = l
+	if len(n.Details.Ip4AndPorts) < l {
+		n.Details.Ip4AndPorts = make([]Ip4AndPort, l)
+	}
 
-	n.Details.Ip6AndPorts = append(n.Details.Ip6AndPorts, cache.v6...)
-	n.Details.Ip6AndPorts = append(n.Details.Ip6AndPorts, cache.learnedV6...)
+	i := 0
+	for _, v := range cache.learnedV4 {
+		n.Details.Ip4AndPorts[i] = v
+		i++
+	}
+
+	for _, v := range cache.v4 {
+		n.Details.Ip4AndPorts[i] = v
+		i++
+	}
+
+	l = len(cache.learnedV6) + len(cache.v6)
+	n.Details.v6Counter = l
+	if len(n.Details.Ip6AndPorts) < l {
+		n.Details.Ip6AndPorts = make([]Ip6AndPort, l)
+	}
+
+	i = 0
+	for _, v := range cache.learnedV6 {
+		n.Details.Ip6AndPorts[i] = v
+		i++
+	}
+
+	for _, v := range cache.v6 {
+		n.Details.Ip6AndPorts[i] = v
+		i++
+	}
 }
 
 func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp uint32) {
@@ -610,11 +636,11 @@ func (lhh *LightHouseHandler) handleHostQueryReply(n *NebulaMeta, vpnIp uint32) 
 	}
 
 	// We can't just slam the responses in as they may come from multiple lighthouses and we should coalesce the answers
-	for _, to := range n.Details.Ip4AndPorts {
+	for _, to := range n.Details.Ip4AndPorts[:n.Details.v4Counter] {
 		lhh.lh.addRemoteV4(n.Details.VpnIp, to, false, false)
 	}
 
-	for _, to := range n.Details.Ip6AndPorts {
+	for _, to := range n.Details.Ip6AndPorts[:n.Details.v6Counter] {
 		lhh.lh.addRemoteV6(n.Details.VpnIp, to, false, false)
 	}
 
@@ -652,13 +678,13 @@ func (lhh *LightHouseHandler) handleHostUpdateNotification(n *NebulaMeta, vpnIp 
 	am.v4 = am.v4[:0]
 	am.v6 = am.v6[:0]
 
-	for _, v := range n.Details.Ip4AndPorts {
+	for _, v := range n.Details.Ip4AndPorts[:n.Details.v4Counter] {
 		if lhh.lh.unlockedShouldAddV4(am.v4, v) {
 			am.v4 = append(am.v4, v)
 		}
 	}
 
-	for _, v := range n.Details.Ip6AndPorts {
+	for _, v := range n.Details.Ip6AndPorts[:n.Details.v6Counter] {
 		if lhh.lh.unlockedShouldAddV6(am.v6, v) {
 			am.v6 = append(am.v6, v)
 		}

@@ -154,9 +154,6 @@ type NebulaMetaDetails struct {
 	Ip4AndPorts []Ip4AndPort `protobuf:"bytes,2,rep,name=Ip4AndPorts,proto3" json:"Ip4AndPorts"`
 	Ip6AndPorts []Ip6AndPort `protobuf:"bytes,4,rep,name=Ip6AndPorts,proto3" json:"Ip6AndPorts"`
 	Counter     uint32       `protobuf:"varint,3,opt,name=counter,proto3" json:"counter,omitempty"`
-
-	v4Counter int
-	v6Counter int
 }
 
 func (m *NebulaMetaDetails) Reset()         { *m = NebulaMetaDetails{} }
@@ -626,8 +623,8 @@ func (m *NebulaMetaDetails) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.v6Counter > 0 {
-		for iNdEx := m.v6Counter - 1; iNdEx >= 0; iNdEx-- {
+	if len(m.Ip6AndPorts) > 0 {
+		for iNdEx := len(m.Ip6AndPorts) - 1; iNdEx >= 0; iNdEx-- {
 			{
 				size, err := m.Ip6AndPorts[iNdEx].MarshalToSizedBuffer(dAtA[:i])
 				if err != nil {
@@ -645,10 +642,8 @@ func (m *NebulaMetaDetails) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x18
 	}
-	//if len(m.Ip4AndPorts) > 0 {
-	//             for iNdEx := len(m.Ip4AndPorts) - 1; iNdEx >= 0; iNdEx-- {
-	if m.v4Counter > 0 {
-		for iNdEx := m.v4Counter - 1; iNdEx >= 0; iNdEx-- {
+	if len(m.Ip4AndPorts) > 0 {
+		for iNdEx := len(m.Ip4AndPorts) - 1; iNdEx >= 0; iNdEx-- {
 			{
 				size, err := m.Ip4AndPorts[iNdEx].MarshalToSizedBuffer(dAtA[:i])
 				if err != nil {
@@ -667,14 +662,6 @@ func (m *NebulaMetaDetails) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x8
 	}
 	return len(dAtA) - i, nil
-}
-
-func (m *Ip4AndPort) Copy() *Ip4AndPort {
-	return &Ip4AndPort{Ip: m.Ip, Port: m.Port}
-}
-
-func (m *Ip6AndPort) Copy() *Ip6AndPort {
-	return &Ip6AndPort{Hi: m.Hi, Lo: m.Lo, Port: m.Port}
 }
 
 func (m *Ip4AndPort) Marshal() (dAtA []byte, err error) {
@@ -909,8 +896,8 @@ func (m *NebulaMetaDetails) Size() (n int) {
 	if m.VpnIp != 0 {
 		n += 1 + sovNebula(uint64(m.VpnIp))
 	}
-	if m.v4Counter > 0 {
-		for _, e := range m.Ip4AndPorts[:m.v4Counter] {
+	if len(m.Ip4AndPorts) > 0 {
+		for _, e := range m.Ip4AndPorts {
 			l = e.Size()
 			n += 1 + l + sovNebula(uint64(l))
 		}
@@ -918,8 +905,8 @@ func (m *NebulaMetaDetails) Size() (n int) {
 	if m.Counter != 0 {
 		n += 1 + sovNebula(uint64(m.Counter))
 	}
-	if m.v6Counter > 0 {
-		for _, e := range m.Ip6AndPorts[:m.v6Counter] {
+	if len(m.Ip6AndPorts) > 0 {
+		for _, e := range m.Ip6AndPorts {
 			l = e.Size()
 			n += 1 + l + sovNebula(uint64(l))
 		}
@@ -1131,8 +1118,6 @@ func (m *NebulaMeta) Unmarshal(dAtA []byte) error {
 func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
-	m.v4Counter = 0
-	m.v6Counter = 0
 	for iNdEx < l {
 		preIndex := iNdEx
 		var wire uint64
@@ -1207,14 +1192,11 @@ func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if len(m.Ip4AndPorts) == m.v4Counter {
-				m.Ip4AndPorts = append(m.Ip4AndPorts, Ip4AndPort{})
-			}
-			if err := m.Ip4AndPorts[m.v4Counter].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			m.Ip4AndPorts = append(m.Ip4AndPorts, Ip4AndPort{})
+			if err := m.Ip4AndPorts[len(m.Ip4AndPorts)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
-			m.v4Counter++
 		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Counter", wireType)
@@ -1263,14 +1245,11 @@ func (m *NebulaMetaDetails) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if len(m.Ip6AndPorts) == m.v6Counter {
-				m.Ip6AndPorts = append(m.Ip6AndPorts, Ip6AndPort{})
-			}
-			if err := m.Ip6AndPorts[m.v6Counter].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			m.Ip6AndPorts = append(m.Ip6AndPorts, Ip6AndPort{})
+			if err := m.Ip6AndPorts[len(m.Ip6AndPorts)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
-			m.v6Counter++
 		default:
 			iNdEx = preIndex
 			skippy, err := skipNebula(dAtA[iNdEx:])

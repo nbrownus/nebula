@@ -1,0 +1,69 @@
+***************
+*** 153,158 ****
+  	Ip4AndPorts []*Ip4AndPort `protobuf:"bytes,2,rep,name=Ip4AndPorts,proto3" json:"Ip4AndPorts,omitempty"`
+  	Ip6AndPorts []*Ip6AndPort `protobuf:"bytes,4,rep,name=Ip6AndPorts,proto3" json:"Ip6AndPorts,omitempty"`
+  	Counter     uint32        `protobuf:"varint,3,opt,name=counter,proto3" json:"counter,omitempty"`
+  }
+  
+  func (m *NebulaMetaDetails) Reset()         { *m = NebulaMetaDetails{} }
+--- 153,160 ----
+  	Ip4AndPorts []*Ip4AndPort `protobuf:"bytes,2,rep,name=Ip4AndPorts,proto3" json:"Ip4AndPorts,omitempty"`
+  	Ip6AndPorts []*Ip6AndPort `protobuf:"bytes,4,rep,name=Ip6AndPorts,proto3" json:"Ip6AndPorts,omitempty"`
+  	Counter     uint32        `protobuf:"varint,3,opt,name=counter,proto3" json:"counter,omitempty"`
++ 	v4Counter   int
++ 	v6Counter   int
+  }
+  
+  func (m *NebulaMetaDetails) Reset()         { *m = NebulaMetaDetails{} }
+***************
+*** 1192,1201 ****
+  			if postIndex > l {
+  				return io.ErrUnexpectedEOF
+  			}
+- 			m.Ip4AndPorts = append(m.Ip4AndPorts, &Ip4AndPort{})
+- 			if err := m.Ip4AndPorts[len(m.Ip4AndPorts)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+  				return err
+  			}
+  			iNdEx = postIndex
+  		case 3:
+  			if wireType != 0 {
+--- 1206,1218 ----
+  			if postIndex > l {
+  				return io.ErrUnexpectedEOF
+  			}
++ 			if len(m.Ip4AndPorts) == m.v4Counter {
++ 				m.Ip4AndPorts = append(m.Ip4AndPorts, &Ip4AndPort{})
++ 			}
++ 			if err := m.Ip4AndPorts[m.v4Counter].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+  				return err
+  			}
++ 			m.v4Counter++
+  			iNdEx = postIndex
+  		case 3:
+  			if wireType != 0 {
+***************
+*** 1245,1254 ****
+  			if postIndex > l {
+  				return io.ErrUnexpectedEOF
+  			}
+- 			m.Ip6AndPorts = append(m.Ip6AndPorts, &Ip6AndPort{})
+- 			if err := m.Ip6AndPorts[len(m.Ip6AndPorts)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+  				return err
+  			}
+  			iNdEx = postIndex
+  		default:
+  			iNdEx = preIndex
+--- 1262,1274 ----
+  			if postIndex > l {
+  				return io.ErrUnexpectedEOF
+  			}
++ 			if len(m.Ip6AndPorts) == m.v6Counter {
++ 				m.Ip6AndPorts = append(m.Ip6AndPorts, &Ip6AndPort{})
++ 			}
++ 			if err := m.Ip6AndPorts[m.v6Counter].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+  				return err
+  			}
++ 			m.v6Counter++
+  			iNdEx = postIndex
+  		default:
+  			iNdEx = preIndex

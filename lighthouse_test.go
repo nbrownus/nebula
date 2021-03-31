@@ -224,6 +224,7 @@ func newLHHostUpdate(fromAddr *udpAddr, vpnIp uint32, addrs []*udpAddr, lhh *Lig
 		Details: &NebulaMetaDetails{
 			VpnIp:       vpnIp,
 			Ip4AndPorts: make([]*Ip4AndPort, len(addrs)),
+			v4Counter:   len(addrs),
 		},
 	}
 
@@ -329,8 +330,7 @@ func (tw *testEncWriter) SendMessageToVpnIp(t NebulaMessageType, st NebulaMessag
 		vpnIp:      vpnIp,
 		msg:        &NebulaMeta{},
 	}
-
-	err := proto.Unmarshal(p, tw.lastReply.msg)
+	err := tw.lastReply.msg.Unmarshal(p)
 	if err != nil {
 		panic(err)
 	}

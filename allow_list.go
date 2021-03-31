@@ -33,7 +33,7 @@ func (al *AllowList) Allow(ip net.IP) bool {
 	}
 }
 
-func (al *AllowList) AllowLH4(ip *Ip4AndPort) bool {
+func (al *AllowList) AllowLH4(ip Ip4AndPort) bool {
 	if al == nil {
 		return true
 	}
@@ -47,7 +47,7 @@ func (al *AllowList) AllowLH4(ip *Ip4AndPort) bool {
 	}
 }
 
-func (al *AllowList) AllowLH6(ip *Ip6AndPort) bool {
+func (al *AllowList) AllowLH6(ip Ip6AndPort) bool {
 	if al == nil {
 		return true
 	}
