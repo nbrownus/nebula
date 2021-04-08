@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestGoodHandshake(t *testing.T) {
+func TestCase1(t *testing.T) {
 	ca, _, caKey, _ := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
 	myControl, myVpnIp, myUdpAddr := newSimpleServer(ca, caKey, "me", net.IP{10, 0, 0, 1})
 	theirControl, theirVpnIp, theirUdpAddr := newSimpleServer(ca, caKey, "them", net.IP{10, 0, 0, 2})
@@ -60,7 +60,61 @@ func TestGoodHandshake(t *testing.T) {
 	//TODO: assert hostmaps
 }
 
-func TestWrongResponderHandshake(t *testing.T) {
+func TestCase2(t *testing.T) {
+	ca, _, caKey, _ := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
+	myControl, myVpnIp, myUdpAddr := newSimpleServer(ca, caKey, "me  ", net.IP{10, 0, 0, 1})
+	theirControl, theirVpnIp, theirUdpAddr := newSimpleServer(ca, caKey, "them", net.IP{10, 0, 0, 2})
+
+	// Put their info in our lighthouse and vice versa
+	myControl.InjectLightHouseAddr(theirVpnIp, theirUdpAddr)
+	theirControl.InjectLightHouseAddr(myVpnIp, myUdpAddr)
+
+	// Build a router so we don't have to reason who gets which packet
+	r := router.NewR(myControl, theirControl)
+
+	// Start the servers
+	myControl.Start()
+	theirControl.Start()
+
+	t.Log("Trigger a handshake to start on both me and them")
+	myControl.InjectTunUDPPacket(theirVpnIp, 80, 80, []byte("Hi from me"))
+	theirControl.InjectTunUDPPacket(myVpnIp, 80, 80, []byte("Hi from them"))
+
+	t.Log("Get both stage 1 handshake packets")
+	myHsForThem := myControl.GetFromUDP(true)
+	theirHsForMe := theirControl.GetFromUDP(true)
+
+	t.Log("Now inject both stage 1 handshake packets")
+	myControl.InjectUDPPacket(theirHsForMe)
+	theirControl.InjectUDPPacket(myHsForThem)
+	//TODO: they should win, grab their index for me and make sure I use it in the end.
+
+	t.Log("They should not have a stage 2 (won the race) but I should send one")
+	theirControl.InjectUDPPacket(myControl.GetFromUDP(true))
+
+	t.Log("Route for me until I send a message packet to them")
+	myControl.WaitForType(1, 0, theirControl)
+
+	t.Log("My cached packet should be received by them")
+	myCachedPacket := theirControl.GetFromTun(true)
+	assertUdpPacket(t, []byte("Hi from me"), myCachedPacket, myVpnIp, theirVpnIp, 80, 80)
+
+	t.Log("Route for them until I send a message packet to me")
+	theirControl.WaitForType(1, 0, myControl)
+
+	t.Log("Their cached packet should be received by me")
+	theirCachedPacket := myControl.GetFromTun(true)
+	assertUdpPacket(t, []byte("Hi from them"), theirCachedPacket, theirVpnIp, myVpnIp, 80, 80)
+
+	t.Log("Do a bidirectional tunnel test")
+	assertTunnel(t, myVpnIp, theirVpnIp, myControl, theirControl, r)
+
+	myControl.Stop()
+	theirControl.Stop()
+	//TODO: assert hostmaps
+}
+
+func Test_Case3(t *testing.T) {
 	ca, _, caKey, _ := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
 
 	// The IPs here are chosen on purpose:
@@ -122,60 +176,6 @@ func TestWrongResponderHandshake(t *testing.T) {
 	t.Log("Success!")
 	myControl.Stop()
 	theirControl.Stop()
-}
-
-func Test_Case1_Stage1Race(t *testing.T) {
-	ca, _, caKey, _ := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
-	myControl, myVpnIp, myUdpAddr := newSimpleServer(ca, caKey, "me  ", net.IP{10, 0, 0, 1})
-	theirControl, theirVpnIp, theirUdpAddr := newSimpleServer(ca, caKey, "them", net.IP{10, 0, 0, 2})
-
-	// Put their info in our lighthouse and vice versa
-	myControl.InjectLightHouseAddr(theirVpnIp, theirUdpAddr)
-	theirControl.InjectLightHouseAddr(myVpnIp, myUdpAddr)
-
-	// Build a router so we don't have to reason who gets which packet
-	r := router.NewR(myControl, theirControl)
-
-	// Start the servers
-	myControl.Start()
-	theirControl.Start()
-
-	t.Log("Trigger a handshake to start on both me and them")
-	myControl.InjectTunUDPPacket(theirVpnIp, 80, 80, []byte("Hi from me"))
-	theirControl.InjectTunUDPPacket(myVpnIp, 80, 80, []byte("Hi from them"))
-
-	t.Log("Get both stage 1 handshake packets")
-	myHsForThem := myControl.GetFromUDP(true)
-	theirHsForMe := theirControl.GetFromUDP(true)
-
-	t.Log("Now inject both stage 1 handshake packets")
-	myControl.InjectUDPPacket(theirHsForMe)
-	theirControl.InjectUDPPacket(myHsForThem)
-	//TODO: they should win, grab their index for me and make sure I use it in the end.
-
-	t.Log("They should not have a stage 2 (won the race) but I should send one")
-	theirControl.InjectUDPPacket(myControl.GetFromUDP(true))
-
-	t.Log("Route for me until I send a message packet to them")
-	myControl.WaitForType(1, 0, theirControl)
-
-	t.Log("My cached packet should be received by them")
-	myCachedPacket := theirControl.GetFromTun(true)
-	assertUdpPacket(t, []byte("Hi from me"), myCachedPacket, myVpnIp, theirVpnIp, 80, 80)
-
-	t.Log("Route for them until I send a message packet to me")
-	theirControl.WaitForType(1, 0, myControl)
-
-	t.Log("Their cached packet should be received by me")
-	theirCachedPacket := myControl.GetFromTun(true)
-	assertUdpPacket(t, []byte("Hi from them"), theirCachedPacket, theirVpnIp, myVpnIp, 80, 80)
-
-	t.Log("Do a bidirectional tunnel test")
-	assertTunnel(t, myVpnIp, theirVpnIp, myControl, theirControl, r)
-
-	myControl.Stop()
-	theirControl.Stop()
-	//TODO: assert hostmaps
 }
 
 //TODO: add a test with many lies
