@@ -1,0 +1,28 @@
+name: generate plantuml
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    paths:
+      - '.github/workflows/gendocs.yml'
+      - '**.plantuml'
+      - '**.puml'
+
+jobs:
+  generate_plantuml:
+    runs-on: ubuntu-latest
+    name: plantuml
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: Generate SVG Diagrams
+        uses: cloudbees/plantuml-github-action@master
+        with:
+          args: -v -tsvg '**.plantuml' -o plantgen/
+
+      - uses: actions/upload-artifact@v2
+        with:
+          name: plantuml
+          path: '**/plantgen/*'
