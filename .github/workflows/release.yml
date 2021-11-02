@@ -86,18 +86,16 @@ jobs:
           lipo -create -output ./release/nebula-cert ./build/darwin-amd64/nebula-cert ./build/darwin-arm64/nebula-cert
 
           codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.nebula" ./release/nebula
-          codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.nebula" ./release/nebula-cert
+          codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp --options=runtime -i "net.defined.nebula-cert" ./release/nebula-cert
 
-          hdiutil create -volname "nebula" -srcfolder ./release/ ./release/nebula.dmg
-          codesign -s "10BC1FDDEB6CE753550156C0669109FAC49E4D1E" -f -v --timestamp -i "net.defined.nebula" ./release/nebula.dmg
-          xcrun notarytool submit ./release/nebula.dmg --team-id "576H3XS7FP" --apple-id "$AC_USERNAME" --password "$AC_PASSWORD" --wait
-          xcrun stapler staple ./release/nebula.dmg
+          zip -j release/nebula-darwin.zip release/nebula-cert release/nebula
+          xcrun notarytool submit ./release/nebula-darwin.zip --team-id "576H3XS7FP" --apple-id "$AC_USERNAME" --password "$AC_PASSWORD" --wait
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v2
         with:
           name: darwin-latest
-          path: ./release/nebula.dmg
+          path: ./release/*
 
   release:
     name: Create and Upload Release
@@ -125,13 +123,15 @@ jobs:
                 sha256sum nebula-windows-amd64.zip
               elif [ "$dir" = darwin-latest ]
               then
-                sha256sum <nebula.dmg | sed 's=-$=nebula-darwin.dmg='
+                sha256sum <nebula-darwin.zip | sed 's=-$=nebula-darwin.zip='
+                sha256sum <nebula | sed 's=-$=nebula-darwin.zip/nebula='
+                sha256sum <nebula-cert | sed 's=-$=nebula-darwin.zip/nebula-cert='
               else
-                  for v in *.tar.gz
-                  do
-                    sha256sum $v
-                    tar zxf $v --to-command='sh -c "sha256sum | sed s=-$='$v'/$TAR_FILENAME="'
-                  done
+                for v in *.tar.gz
+                do
+                  sha256sum $v
+                  tar zxf $v --to-command='sh -c "sha256sum | sed s=-$='$v'/$TAR_FILENAME="'
+                done
               fi
             )
           done | sort -k 2 >SHASUM256.txt
@@ -161,15 +161,15 @@ jobs:
           asset_name: SHASUM256.txt
           asset_content_type: text/plain
 
-      - name: Upload darwin
+      - name: Upload darwin zip
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./darwin-latest/nebula.dmg
-          asset_name: nebula-darwin.dmg
-          asset_content_type: application/octet-stream
+          asset_path: ./darwin-latest/nebula-darwin.zip
+          asset_name: nebula-darwin.zip
+          asset_content_type: application/zip
 
       - name: Upload windows-amd64
         uses: actions/upload-release-asset@v1.0.1
