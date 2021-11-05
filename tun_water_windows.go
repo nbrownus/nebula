@@ -94,6 +94,10 @@ func (c *WindowsWaterTun) WriteRaw(b []byte) error {
 	return err
 }
 
+func (c *WindowsWaterTun) Close() error {
+	return nil
+}
+
 func (t *WindowsWaterTun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for windows")
 }
