@@ -4,29 +4,34 @@
 package nebula
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"strings"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/iputil"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
 
 type Tun struct {
 	io.ReadWriteCloser
-	fd           int
-	Device       string
-	Cidr         *net.IPNet
-	MaxMTU       int
-	DefaultMTU   int
-	TXQueueLen   int
-	Routes       []route
-	UnsafeRoutes []route
-	l            *logrus.Logger
+	fd         int
+	Device     string
+	Cidr       *net.IPNet
+	MaxMTU     int
+	DefaultMTU int
+	TXQueueLen int
+	Routes     []route
+	cidrTree   *cidr.Tree4
+	routeChan  chan netlink.RouteUpdate
+	l          *logrus.Logger
 }
 
 type ifReq struct {
@@ -42,26 +47,6 @@ func ioctl(a1, a2, a3 uintptr) error {
 	}
 	return nil
 }
-
-/*
-func ipv4(addr string) (o [4]byte, err error) {
-	ip := net.ParseIP(addr).To4()
-	if ip == nil {
-		err = fmt.Errorf("failed to parse addr %s", addr)
-		return
-	}
-	for i, b := range ip {
-		o[i] = b
-	}
-	return
-}
-*/
-
-const (
-	cIFF_TUN         = 0x0001
-	cIFF_NO_PI       = 0x1000
-	cIFF_MULTI_QUEUE = 0x0100
-)
 
 type ifreqAddr struct {
 	Name [16]byte
@@ -81,35 +66,42 @@ type ifreqQLEN struct {
 	pad   [8]byte
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
-
+func newTunFromFd(l *logrus.Logger, deviceFd int, certCIDR *net.IPNet, defaultMTU int, routes []route, txQueueLen int) (ifce *Tun, err error) {
 	file := os.NewFile(uintptr(deviceFd), "/dev/net/tun")
+
+	cidrTree := cidr.NewTree4()
+	for _, r := range routes {
+		if r.via != nil {
+			cidrTree.AddCIDR(r.route, r.via)
+		}
+	}
 
 	ifce = &Tun{
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
 		Device:          "tun0",
-		Cidr:            cidr,
+		Cidr:            certCIDR,
 		DefaultMTU:      defaultMTU,
 		TXQueueLen:      txQueueLen,
 		Routes:          routes,
-		UnsafeRoutes:    unsafeRoutes,
+		cidrTree:        cidrTree,
 		l:               l,
 	}
 	return
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
+func newTun(l *logrus.Logger, deviceName string, certCIDR *net.IPNet, defaultMTU int, routes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
 	fd, err := unix.Open("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
 	}
 
 	var req ifReq
-	req.Flags = uint16(cIFF_TUN | cIFF_NO_PI)
+	req.Flags = uint16(unix.IFF_TUN | unix.IFF_NO_PI)
 	if multiqueue {
-		req.Flags |= cIFF_MULTI_QUEUE
+		req.Flags |= unix.IFF_MULTI_QUEUE
 	}
+
 	copy(req.Name[:], deviceName)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
 		return nil, err
@@ -118,10 +110,15 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 
 	file := os.NewFile(uintptr(fd), "/dev/net/tun")
 
+	cidrTree := cidr.NewTree4()
 	maxMTU := defaultMTU
 	for _, r := range routes {
 		if r.mtu > maxMTU {
 			maxMTU = r.mtu
+		}
+
+		if r.via != nil {
+			cidrTree.AddCIDR(r.route, r.via)
 		}
 	}
 
@@ -129,12 +126,12 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int
 		ReadWriteCloser: file,
 		fd:              int(file.Fd()),
 		Device:          name,
-		Cidr:            cidr,
+		Cidr:            certCIDR,
 		MaxMTU:          maxMTU,
 		DefaultMTU:      defaultMTU,
 		TXQueueLen:      txQueueLen,
 		Routes:          routes,
-		UnsafeRoutes:    unsafeRoutes,
+		cidrTree:        cidrTree,
 		l:               l,
 	}
 	return
@@ -147,7 +144,7 @@ func (c *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	}
 
 	var req ifReq
-	req.Flags = uint16(cIFF_TUN | cIFF_NO_PI | cIFF_MULTI_QUEUE)
+	req.Flags = uint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_MULTI_QUEUE)
 	copy(req.Name[:], c.Device)
 	if err = ioctl(uintptr(fd), uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&req))); err != nil {
 		return nil, err
@@ -156,6 +153,18 @@ func (c *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	file := os.NewFile(uintptr(fd), "/dev/net/tun")
 
 	return file, nil
+}
+
+func (c *Tun) Close() error {
+	if c.ReadWriteCloser != nil {
+		c.ReadWriteCloser.Close()
+	}
+
+	if c.routeChan != nil {
+		close(c.routeChan)
+	}
+
+	return nil
 }
 
 func (c *Tun) WriteRaw(b []byte) error {
@@ -194,6 +203,7 @@ func (c Tun) deviceBytes() (o [16]byte) {
 func (c Tun) Activate() error {
 	devName := c.deviceBytes()
 
+	c.watchRoutes()
 	var addr, mask [4]byte
 
 	copy(addr[:], c.Cidr.IP.To4())
@@ -284,22 +294,6 @@ func (c Tun) Activate() error {
 			LinkIndex: link.Attrs().Index,
 			Dst:       r.route,
 			MTU:       r.mtu,
-			AdvMSS:    c.advMSS(r),
-			Scope:     unix.RT_SCOPE_LINK,
-		}
-
-		err = netlink.RouteAdd(&nr)
-		if err != nil {
-			return fmt.Errorf("failed to set mtu %v on route %v; %v", r.mtu, r.route, err)
-		}
-	}
-
-	// Unsafe path routes
-	for _, r := range c.UnsafeRoutes {
-		nr := netlink.Route{
-			LinkIndex: link.Attrs().Index,
-			Dst:       r.route,
-			MTU:       r.mtu,
 			Priority:  r.metric,
 			AdvMSS:    c.advMSS(r),
 			Scope:     unix.RT_SCOPE_LINK,
@@ -329,14 +323,93 @@ func (c *Tun) DeviceName() string {
 }
 
 func (c Tun) advMSS(r route) int {
-	mtu := r.mtu
-	if r.mtu == 0 {
-		mtu = c.DefaultMTU
+	mtu := c.DefaultMTU
+
+	if r.mtu != 0 {
+		mtu = r.mtu
 	}
 
 	// We only need to set advmss if the route MTU does not match the device MTU
 	if mtu != c.MaxMTU {
 		return mtu - 40
 	}
+
 	return 0
+}
+
+func (c *Tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+	r := c.cidrTree.MostSpecificContains(ip)
+	if r != nil {
+		return r.(iputil.VpnIp)
+	}
+
+	return 0
+}
+
+func (c *Tun) watchRoutes() {
+	rch := make(chan netlink.RouteUpdate)
+	dch := make(chan struct{})
+
+	if err := netlink.RouteSubscribe(rch, dch); err != nil {
+		c.l.WithError(err).Errorf("failed to subscribe to system route changes")
+		return
+	}
+
+	c.routeChan = rch
+
+	go func() {
+		for {
+			select {
+			case r := <-rch:
+				c.updateRoutes(r)
+			case <-dch:
+				close(rch)
+				break
+			}
+		}
+	}()
+}
+
+func (c *Tun) updateRoutes(r netlink.RouteUpdate) {
+	if r.Gw == nil {
+		// Not a gateway route, ignore
+		c.l.WithField("route", r).Debug("Ignoring route update, not a gateway route")
+		return
+	}
+
+	if !c.Cidr.Contains(r.Gw) {
+		// Gateway isn't in our network, ignore
+		c.l.WithField("route", r).Debug("Ignoring route update, not in our network")
+		return
+	}
+
+	if x := r.Dst.IP.To4(); x == nil {
+		c.l.WithField("route", r).Debug("Ignoring route update, destination is not ipv4")
+		return
+	}
+
+	newTree := cidr.NewTree4()
+	if r.Type == unix.RTM_NEWROUTE {
+		//TODO: come up with a way to support priority/metrics
+		for _, oldR := range c.cidrTree.List() {
+			newTree.AddCIDR(oldR.CIDR, oldR.Value)
+		}
+
+		c.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Adding route")
+		newTree.AddCIDR(r.Dst, iputil.Ip2VpnIp(r.Gw))
+
+	} else {
+		gw := iputil.Ip2VpnIp(r.Gw)
+		for _, oldR := range c.cidrTree.List() {
+			if bytes.Equal(oldR.CIDR.IP, r.Dst.IP) && bytes.Equal(oldR.CIDR.Mask, r.Dst.Mask) && *oldR.Value != nil && (*oldR.Value).(iputil.VpnIp) == gw {
+				// This is the record to delete
+				c.l.WithField("destination", r.Dst).WithField("via", r.Gw).Info("Removing route")
+				continue
+			}
+
+			newTree.AddCIDR(oldR.CIDR, oldR.Value)
+		}
+	}
+
+	atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(&c.cidrTree)), (unsafe.Pointer)(newTree))
 }

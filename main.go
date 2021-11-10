@@ -80,10 +80,12 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	if err != nil {
 		return nil, NewContextualError("Could not parse tun.routes", nil, err)
 	}
+
 	unsafeRoutes, err := parseUnsafeRoutes(c, tunCidr)
 	if err != nil {
 		return nil, NewContextualError("Could not parse tun.unsafe_routes", nil, err)
 	}
+	routes = append(routes, unsafeRoutes...)
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	wireSSHReload(l, ssh, c)
@@ -150,7 +152,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 				tunCidr,
 				c.GetInt("tun.mtu", DEFAULT_MTU),
 				routes,
-				unsafeRoutes,
 				c.GetInt("tun.tx_queue", 500),
 			)
 		default:
@@ -160,7 +161,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 				tunCidr,
 				c.GetInt("tun.mtu", DEFAULT_MTU),
 				routes,
-				unsafeRoutes,
 				c.GetInt("tun.tx_queue", 500),
 				routines > 1,
 			)
@@ -240,8 +240,6 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	hostMap := NewHostMap(l, "main", tunCidr, preferredRanges)
-
-	hostMap.addUnsafeRoutes(&unsafeRoutes)
 	hostMap.metricsEnabled = c.GetBool("stats.message_metrics", false)
 
 	l.WithField("network", hostMap.vpnCIDR).WithField("preferredRanges", hostMap.preferredRanges).Info("Main HostMap created")

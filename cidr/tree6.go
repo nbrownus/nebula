@@ -71,7 +71,7 @@ func (tree *Tree6) AddCIDR(cidr *net.IPNet, val interface{}) {
 	}
 
 	// Final node marks our cidr, set the value
-	node.value = val
+	node.Value = val
 }
 
 // Finds the most specific match
@@ -90,8 +90,8 @@ func (tree *Tree6) MostSpecificContains(ip net.IP) (value interface{}) {
 		bit := startbit
 
 		for node != nil {
-			if node.value != nil {
-				value = node.value
+			if node.Value != nil {
+				value = node.Value
 			}
 
 			if bit == 0 {
@@ -116,8 +116,8 @@ func (tree *Tree6) MostSpecificContainsIpV4(ip iputil.VpnIp) (value interface{})
 	node := tree.root4
 
 	for node != nil {
-		if node.value != nil {
-			value = node.value
+		if node.Value != nil {
+			value = node.Value
 		}
 
 		if ip&bit != 0 {
@@ -140,8 +140,8 @@ func (tree *Tree6) MostSpecificContainsIpV6(hi, lo uint64) (value interface{}) {
 		bit := startbit6
 
 		for node != nil {
-			if node.value != nil {
-				value = node.value
+			if node.Value != nil {
+				value = node.Value
 			}
 
 			if bit == 0 {

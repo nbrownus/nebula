@@ -28,6 +28,7 @@ type Inside interface {
 	DeviceName() string
 	WriteRaw([]byte) error
 	NewMultiQueueReader() (io.ReadWriteCloser, error)
+	RouteFor(iputil.VpnIp) iputil.VpnIp
 }
 
 type InterfaceConfig struct {

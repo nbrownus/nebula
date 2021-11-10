@@ -1,6 +1,8 @@
 package cidr
 
-import "net"
+import (
+	"net"
+)
 
 // Parse is a convenience function that returns only the IPNet
 // This function ignores errors since it is primarily a test helper, the result could be nil

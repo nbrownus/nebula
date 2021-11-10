@@ -9,6 +9,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/iputil"
 )
 
 type disabledTun struct {
@@ -49,6 +50,10 @@ func (t *disabledTun) CidrNet() *net.IPNet {
 
 func (*disabledTun) DeviceName() string {
 	return "disabled"
+}
+
+func (*disabledTun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+	return 0
 }
 
 func (t *disabledTun) Read(b []byte) (int, error) {

@@ -23,7 +23,7 @@ func parseRoutes(c *config.C, network *net.IPNet) ([]route, error) {
 
 	r := c.Get("tun.routes")
 	if r == nil {
-		return []route{}, nil
+		return nil, nil
 	}
 
 	rawRoutes, ok := r.([]interface{})
@@ -32,7 +32,7 @@ func parseRoutes(c *config.C, network *net.IPNet) ([]route, error) {
 	}
 
 	if len(rawRoutes) < 1 {
-		return []route{}, nil
+		return nil, nil
 	}
 
 	routes := make([]route, len(rawRoutes))
@@ -93,7 +93,7 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]route, error) {
 
 	r := c.Get("tun.unsafe_routes")
 	if r == nil {
-		return []route{}, nil
+		return nil, nil
 	}
 
 	rawRoutes, ok := r.([]interface{})
@@ -102,7 +102,7 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]route, error) {
 	}
 
 	if len(rawRoutes) < 1 {
-		return []route{}, nil
+		return nil, nil
 	}
 
 	routes := make([]route, len(rawRoutes))
