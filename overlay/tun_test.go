@@ -1,4 +1,4 @@
-package nebula
+package overlay
 
 import (
 	"fmt"
@@ -6,12 +6,12 @@ import (
 	"testing"
 
 	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/util"
+	"github.com/slackhq/nebula/test"
 	"github.com/stretchr/testify/assert"
 )
 
 func Test_parseRoutes(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	c := config.NewC(l)
 	_, n, _ := net.ParseCIDR("10.0.0.0/24")
 
@@ -91,12 +91,12 @@ func Test_parseRoutes(t *testing.T) {
 
 	tested := 0
 	for _, r := range routes {
-		if r.mtu == 8000 {
-			assert.Equal(t, "10.0.0.1/32", r.route.String())
+		if r.MTU == 8000 {
+			assert.Equal(t, "10.0.0.1/32", r.Cidr.String())
 			tested++
 		} else {
-			assert.Equal(t, 9000, r.mtu)
-			assert.Equal(t, "10.0.0.0/29", r.route.String())
+			assert.Equal(t, 9000, r.MTU)
+			assert.Equal(t, "10.0.0.0/29", r.Cidr.String())
 			tested++
 		}
 	}
@@ -107,7 +107,7 @@ func Test_parseRoutes(t *testing.T) {
 }
 
 func Test_parseUnsafeRoutes(t *testing.T) {
-	l := util.NewTestLogger()
+	l := test.NewLogger()
 	c := config.NewC(l)
 	_, n, _ := net.ParseCIDR("10.0.0.0/24")
 
@@ -190,7 +190,7 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "route": "1.0.0.0/8"}}}
 	routes, err = parseUnsafeRoutes(c, n)
 	assert.Len(t, routes, 1)
-	assert.Equal(t, DEFAULT_MTU, routes[0].mtu)
+	assert.Equal(t, DefaultMTU, routes[0].MTU)
 
 	// bad mtu
 	c.Settings["tun"] = map[interface{}]interface{}{"unsafe_routes": []interface{}{map[interface{}]interface{}{"via": "127.0.0.1", "mtu": "nope"}}}
@@ -216,17 +216,17 @@ func Test_parseUnsafeRoutes(t *testing.T) {
 
 	tested := 0
 	for _, r := range routes {
-		if r.mtu == 8000 {
-			assert.Equal(t, "1.0.0.1/32", r.route.String())
+		if r.MTU == 8000 {
+			assert.Equal(t, "1.0.0.1/32", r.Cidr.String())
 			tested++
-		} else if r.mtu == 9000 {
-			assert.Equal(t, 9000, r.mtu)
-			assert.Equal(t, "1.0.0.0/29", r.route.String())
+		} else if r.MTU == 9000 {
+			assert.Equal(t, 9000, r.MTU)
+			assert.Equal(t, "1.0.0.0/29", r.Cidr.String())
 			tested++
 		} else {
-			assert.Equal(t, 1500, r.mtu)
-			assert.Equal(t, 1234, r.metric)
-			assert.Equal(t, "1.0.0.2/32", r.route.String())
+			assert.Equal(t, 1500, r.MTU)
+			assert.Equal(t, 1234, r.Metric)
+			assert.Equal(t, "1.0.0.2/32", r.Cidr.String())
 			tested++
 		}
 	}

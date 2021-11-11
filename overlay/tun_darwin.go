@@ -1,7 +1,7 @@
 //go:build !ios && !e2e_testing
 // +build !ios,!e2e_testing
 
-package nebula
+package overlay
 
 import (
 	"fmt"
@@ -12,18 +12,21 @@ import (
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/cidr"
+	"github.com/slackhq/nebula/iputil"
 	netroute "golang.org/x/net/route"
 	"golang.org/x/sys/unix"
 )
 
-type Tun struct {
+type tun struct {
 	io.ReadWriteCloser
-	Device       string
-	Cidr         *net.IPNet
-	DefaultMTU   int
-	TXQueueLen   int
-	UnsafeRoutes []route
-	l            *logrus.Logger
+	Device     string
+	Cidr       *net.IPNet
+	DefaultMTU int
+	TXQueueLen int
+	Routes     []Route
+	cidrTree   *cidr.Tree4
+	l          *logrus.Logger
 
 	// cache out buffer since we need to prepend 4 bytes for tun metadata
 	out []byte
@@ -74,15 +77,16 @@ type ifreqMTU struct {
 	pad  [8]byte
 }
 
-type ifreqQLEN struct {
-	Name  [16]byte
-	Value int32
-	pad   [8]byte
-}
+func newTun(l *logrus.Logger, name string, certCidr *net.IPNet, defaultMTU int, routes []Route, txQueueLen int, _ bool) (t *tun, err error) {
+	cidrTree := cidr.NewTree4()
+	for _, r := range routes {
+		if r.MTU > 0 {
+			return nil, fmt.Errorf("route MTU not supported in Darwin")
+		}
 
-func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
-	if len(routes) > 0 {
-		return nil, fmt.Errorf("route MTU not supported in Darwin")
+		if r.Via != nil {
+			cidrTree.AddCIDR(r.Cidr, r.Via)
+		}
 	}
 
 	ifIndex := -1
@@ -106,7 +110,7 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 		ctlName [96]byte
 	}{}
 
-	copy(ctlInfo.ctlName[:], []byte(utunControlName))
+	copy(ctlInfo.ctlName[:], utunControlName)
 
 	err = ioctl(uintptr(fd), uintptr(_CTLIOCGINFO), uintptr(unsafe.Pointer(ctlInfo)))
 	if err != nil {
@@ -125,7 +129,7 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 		unix.SYS_CONNECT,
 		uintptr(fd),
 		uintptr(unsafe.Pointer(&sc)),
-		uintptr(sockaddrCtlSize),
+		sockaddrCtlSize,
 	)
 	if errno != 0 {
 		return nil, fmt.Errorf("SYS_CONNECT: %v", errno)
@@ -152,38 +156,45 @@ func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, rout
 
 	file := os.NewFile(uintptr(fd), "")
 
-	tun := &Tun{
+	return &tun{
 		ReadWriteCloser: file,
 		Device:          name,
-		Cidr:            cidr,
+		Cidr:            certCidr,
 		DefaultMTU:      defaultMTU,
 		TXQueueLen:      txQueueLen,
-		UnsafeRoutes:    unsafeRoutes,
+		cidrTree:        cidrTree,
 		l:               l,
-	}
-
-	return tun, nil
+	}, nil
 }
 
-func (t *Tun) deviceBytes() (o [16]byte) {
+func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int) (ifce *tun, err error) {
+	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
+}
+
+func (t *tun) deviceBytes() (o [16]byte) {
 	for i, c := range t.Device {
 		o[i] = byte(c)
 	}
 	return
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
-	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
-}
-
-func (c *Tun) Close() error {
-	if c.ReadWriteCloser != nil {
-		return c.ReadWriteCloser.Close()
+func (t *tun) Close() error {
+	if t.ReadWriteCloser != nil {
+		return t.ReadWriteCloser.Close()
 	}
 	return nil
 }
 
-func (t *Tun) Activate() error {
+func (t *tun) RouteFor(ip iputil.VpnIp) iputil.VpnIp {
+	r := t.cidrTree.MostSpecificContains(ip)
+	if r != nil {
+		return r.(iputil.VpnIp)
+	}
+
+	return 0
+}
+
+func (t *tun) Activate() error {
 	devName := t.deviceBytes()
 
 	var addr, mask [4]byte
@@ -231,7 +242,7 @@ func (t *Tun) Activate() error {
 	// Set the MTU on the device
 	ifm := ifreqMTU{Name: devName, MTU: int32(t.DefaultMTU)}
 	if err = ioctl(fd, unix.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifm))); err != nil {
-		return fmt.Errorf("Failed to set tun mtu: %v", err)
+		return fmt.Errorf("failed to set tun mtu: %v", err)
 	}
 
 	/*
@@ -284,10 +295,10 @@ func (t *Tun) Activate() error {
 		return fmt.Errorf("failed to run tun device: %s", err)
 	}
 
-	// Unsafe path routes
-	for _, r := range t.UnsafeRoutes {
-		copy(routeAddr.IP[:], r.route.IP.To4())
-		copy(maskAddr.IP[:], net.IP(r.route.Mask).To4())
+	// path routes
+	for _, r := range t.Routes {
+		copy(routeAddr.IP[:], r.Cidr.IP.To4())
+		copy(maskAddr.IP[:], net.IP(r.Cidr.Mask).To4())
 
 		err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
 		if err != nil {
@@ -353,9 +364,9 @@ func addRoute(sock int, addr, mask *netroute.Inet4Addr, link *netroute.LinkAddr)
 	return nil
 }
 
-var _ io.ReadWriteCloser = (*Tun)(nil)
+var _ io.ReadWriteCloser = (*tun)(nil)
 
-func (t *Tun) Read(to []byte) (int, error) {
+func (t *tun) Read(to []byte) (int, error) {
 
 	buf := make([]byte, len(to)+4)
 
@@ -366,7 +377,7 @@ func (t *Tun) Read(to []byte) (int, error) {
 }
 
 // Write is only valid for single threaded use
-func (t *Tun) Write(from []byte) (int, error) {
+func (t *tun) Write(from []byte) (int, error) {
 	buf := t.out
 	if cap(buf) < len(from)+4 {
 		buf = make([]byte, len(from)+4)
@@ -385,7 +396,7 @@ func (t *Tun) Write(from []byte) (int, error) {
 	} else if ipVer == 6 {
 		buf[3] = syscall.AF_INET6
 	} else {
-		return 0, fmt.Errorf("Unable to determine IP version from packet")
+		return 0, fmt.Errorf("unable to determine IP version from packet")
 	}
 
 	copy(buf[4:], from)
@@ -394,19 +405,19 @@ func (t *Tun) Write(from []byte) (int, error) {
 	return n - 4, err
 }
 
-func (c *Tun) CidrNet() *net.IPNet {
-	return c.Cidr
+func (t *tun) CidrNet() *net.IPNet {
+	return t.Cidr
 }
 
-func (c *Tun) DeviceName() string {
-	return c.Device
+func (t *tun) DeviceName() string {
+	return t.Device
 }
 
-func (c *Tun) WriteRaw(b []byte) error {
-	_, err := c.Write(b)
+func (t *tun) WriteRaw(b []byte) error {
+	_, err := t.Write(b)
 	return err
 }
 
-func (t *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for darwin")
 }

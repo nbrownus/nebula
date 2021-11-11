@@ -1,4 +1,4 @@
-package nebula
+package overlay
 
 import (
 	"encoding/binary"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/rcrowley/go-metrics"
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/iputil"
 )
 
 type disabledTun struct {
@@ -21,22 +22,26 @@ type disabledTun struct {
 	l  *logrus.Logger
 }
 
-func newDisabledTun(cidr *net.IPNet, queueLen int, metricsEnabled bool, l *logrus.Logger) *disabledTun {
-	tun := &disabledTun{
+func newDisabledTun(cidr *net.IPNet, queueLen int, metricsEnabled bool, l *logrus.Logger) (*disabledTun, error) {
+	t := &disabledTun{
 		cidr: cidr,
 		read: make(chan []byte, queueLen),
 		l:    l,
 	}
 
 	if metricsEnabled {
-		tun.tx = metrics.GetOrRegisterCounter("messages.tx.message", nil)
-		tun.rx = metrics.GetOrRegisterCounter("messages.rx.message", nil)
+		t.tx = metrics.GetOrRegisterCounter("messages.tx.message", nil)
+		t.rx = metrics.GetOrRegisterCounter("messages.rx.message", nil)
 	} else {
-		tun.tx = &metrics.NilCounter{}
-		tun.rx = &metrics.NilCounter{}
+		t.tx = &metrics.NilCounter{}
+		t.rx = &metrics.NilCounter{}
 	}
 
-	return tun
+	return t, nil
+}
+
+func (*disabledTun) RouteFor(iputil.VpnIp) iputil.VpnIp {
+	return 0
 }
 
 func (*disabledTun) Activate() error {
@@ -71,7 +76,8 @@ func (t *disabledTun) Read(b []byte) (int, error) {
 
 func (t *disabledTun) handleICMPEchoRequest(b []byte) bool {
 	// Return early if this is not a simple ICMP Echo Request
-	if !(len(b) >= 28 && len(b) <= mtu && b[0] == 0x45 && b[9] == 0x01 && b[20] == 0x08) {
+	//TODO: make constants!
+	if !(len(b) >= 28 && len(b) <= 9001 && b[0] == 0x45 && b[9] == 0x01 && b[20] == 0x08) {
 		return false
 	}
 

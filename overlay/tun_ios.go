@@ -1,7 +1,7 @@
 //go:build ios && !e2e_testing
 // +build ios,!e2e_testing
 
-package nebula
+package overlay
 
 import (
 	"errors"
@@ -13,38 +13,42 @@ import (
 	"syscall"
 
 	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/iputil"
 )
 
-type Tun struct {
+type tun struct {
 	io.ReadWriteCloser
 	Device string
 	Cidr   *net.IPNet
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int, multiqueue bool) (ifce *Tun, err error) {
+func newTun(_ *logrus.Logger, _ string, _ *net.IPNet, _ int, _ []Route, _ int, _ bool) (*tun, error) {
 	return nil, fmt.Errorf("newTun not supported in iOS")
 }
 
-func newTunFromFd(l *logrus.Logger, deviceFd int, cidr *net.IPNet, defaultMTU int, routes []route, unsafeRoutes []route, txQueueLen int) (ifce *Tun, err error) {
+func newTunFromFd(_ *logrus.Logger, deviceFd int, certCidr *net.IPNet, _ int, routes []Route, _ int) (*tun, error) {
 	if len(routes) > 0 {
-		return nil, fmt.Errorf("route MTU not supported in Darwin")
+		return nil, fmt.Errorf("routes are not supported in iOS")
 	}
 
 	file := os.NewFile(uintptr(deviceFd), "/dev/tun")
-	ifce = &Tun{
-		Cidr:            cidr,
+	return &tun{
+		Cidr:            certCidr,
 		Device:          "iOS",
 		ReadWriteCloser: &tunReadCloser{f: file},
-	}
-	return
+	}, nil
 }
 
-func (c *Tun) Activate() error {
+func (t *tun) RouteFor(iputil.VpnIp) iputil.VpnIp {
+	return 0
+}
+
+func (t *tun) Activate() error {
 	return nil
 }
 
-func (c *Tun) WriteRaw(b []byte) error {
-	_, err := c.Write(b)
+func (t *tun) WriteRaw(b []byte) error {
+	_, err := t.Write(b)
 	return err
 }
 
@@ -107,14 +111,14 @@ func (t *tunReadCloser) Close() error {
 	return t.f.Close()
 }
 
-func (c *Tun) CidrNet() *net.IPNet {
-	return c.Cidr
+func (t *tun) CidrNet() *net.IPNet {
+	return t.Cidr
 }
 
-func (c *Tun) DeviceName() string {
-	return c.Device
+func (t *tun) DeviceName() string {
+	return t.Device
 }
 
-func (t *Tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
+func (t *tun) NewMultiQueueReader() (io.ReadWriteCloser, error) {
 	return nil, fmt.Errorf("TODO: multiqueue not implemented for ios")
 }
