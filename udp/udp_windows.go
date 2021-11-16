@@ -5,16 +5,17 @@ package udp
 
 import (
 	"errors"
-	"fmt"
-	"github.com/sirupsen/logrus"
-	"github.com/slackhq/nebula/config"
-	"github.com/slackhq/nebula/firewall"
-	"github.com/slackhq/nebula/header"
 	"io"
+	"net"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
+
+	"github.com/sirupsen/logrus"
+	"github.com/slackhq/nebula/config"
+	"github.com/slackhq/nebula/firewall"
+	"github.com/slackhq/nebula/header"
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/conn/winrio"
@@ -58,7 +59,7 @@ func NewUDPStatsEmitter(_ []*Conn) func() {
 	return func() {}
 }
 
-func NewListener(l *logrus.Logger, ip string, port int, multi bool, batch int) (*Conn, error) {
+func NewListener(l *logrus.Logger, ip net.IP, port int, multi bool, batch int) (*Conn, error) {
 	if !winrio.Initialize() {
 		return nil, errors.New("doh, winrio bad")
 	}
