@@ -56,26 +56,29 @@ type LightHouse struct {
 	punchBack   bool
 	punchDelay  time.Duration
 
+	forceReportAddrs []netIpAndPort
+
 	metrics           *MessageMetrics
 	metricHolepunchTx metrics.Counter
 	l                 *logrus.Logger
 }
 
-func NewLightHouse(l *logrus.Logger, amLighthouse bool, myVpnIpNet *net.IPNet, ips []iputil.VpnIp, interval int, nebulaPort uint32, pc *udp.Conn, punchBack bool, punchDelay time.Duration, metricsEnabled bool) *LightHouse {
+func NewLightHouse(l *logrus.Logger, amLighthouse bool, myVpnIpNet *net.IPNet, ips []iputil.VpnIp, interval int, nebulaPort uint32, pc *udp.Conn, punchBack bool, punchDelay time.Duration, metricsEnabled bool, forceReportAddrs []netIpAndPort) *LightHouse {
 	ones, _ := myVpnIpNet.Mask.Size()
 	h := LightHouse{
-		amLighthouse: amLighthouse,
-		myVpnIp:      iputil.Ip2VpnIp(myVpnIpNet.IP),
-		myVpnZeros:   iputil.VpnIp(32 - ones),
-		addrMap:      make(map[iputil.VpnIp]*RemoteList),
-		nebulaPort:   nebulaPort,
-		lighthouses:  make(map[iputil.VpnIp]struct{}),
-		staticList:   make(map[iputil.VpnIp]struct{}),
-		interval:     interval,
-		punchConn:    pc,
-		punchBack:    punchBack,
-		punchDelay:   punchDelay,
-		l:            l,
+		amLighthouse:     amLighthouse,
+		myVpnIp:          iputil.Ip2VpnIp(myVpnIpNet.IP),
+		myVpnZeros:       iputil.VpnIp(32 - ones),
+		addrMap:          make(map[iputil.VpnIp]*RemoteList),
+		nebulaPort:       nebulaPort,
+		lighthouses:      make(map[iputil.VpnIp]struct{}),
+		staticList:       make(map[iputil.VpnIp]struct{}),
+		interval:         interval,
+		punchConn:        pc,
+		punchBack:        punchBack,
+		punchDelay:       punchDelay,
+		forceReportAddrs: forceReportAddrs,
+		l:                l,
 	}
 
 	if metricsEnabled {
@@ -352,6 +355,14 @@ func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 	var v4 []*Ip4AndPort
 	var v6 []*Ip6AndPort
 
+	for _, e := range lh.forceReportAddrs {
+		if ip := e.ip.To4(); ip != nil {
+			v4 = append(v4, NewIp4AndPort(e.ip, uint32(e.port)))
+		} else {
+			v6 = append(v6, NewIp6AndPort(e.ip, uint32(e.port)))
+		}
+	}
+
 	for _, e := range *localIps(lh.l, lh.localAllowList) {
 		if ip4 := e.To4(); ip4 != nil && ipMaskContains(lh.myVpnIp, lh.myVpnZeros, iputil.Ip2VpnIp(ip4)) {
 			continue
@@ -364,6 +375,7 @@ func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 			v6 = append(v6, NewIp6AndPort(e, lh.nebulaPort))
 		}
 	}
+
 	m := &NebulaMeta{
 		Type: NebulaMeta_HostUpdateNotification,
 		Details: &NebulaMetaDetails{

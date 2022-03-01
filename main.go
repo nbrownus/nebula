@@ -19,6 +19,11 @@ import (
 
 type m map[string]interface{}
 
+type netIpAndPort struct {
+	ip   net.IP
+	port uint16
+}
+
 func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logger, tunFd *int) (retcon *Control, reterr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Automatically cancel the context if Main returns an error, to signal all created goroutines to quit.
@@ -253,6 +258,27 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		l.Warn("No lighthouses.hosts configured, this host will only be able to initiate tunnels with static_host_map entries")
 	}
 
+	rawForceReportAddrs := c.GetStringSlice("lighthouse.x_force_report_addrs", []string{})
+	forceReportAddrs := make([]netIpAndPort, 0)
+
+	for i, rawAddr := range rawForceReportAddrs {
+		fIp, fPort, err := udp.ParseIPAndPort(rawAddr)
+		if err != nil {
+			return nil, util.NewContextualError("Unable to parse lighthouse.x_force_report_addrs entry", m{"addr": rawAddr, "entry": i + 1}, err)
+		}
+
+		if fPort == 0 {
+			fPort = uint16(port)
+		}
+
+		if ip4 := fIp.To4(); ip4 != nil && tunCidr.Contains(fIp) {
+			l.WithField("addr", rawAddr).WithField("entry", i+1).Warn("Ignoring forced ip report because it is within the nebula network range")
+			continue
+		}
+
+		forceReportAddrs = append(forceReportAddrs, netIpAndPort{ip: fIp, port: fPort})
+	}
+
 	lightHouse := NewLightHouse(
 		l,
 		amLighthouse,
@@ -265,6 +291,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 		punchy.Respond,
 		punchy.Delay,
 		c.GetBool("stats.lighthouse_metrics", false),
+		forceReportAddrs,
 	)
 
 	remoteAllowList, err := NewRemoteAllowListFromConfig(c, "lighthouse.remote_allow_list", "lighthouse.remote_allow_ranges")
