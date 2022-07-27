@@ -153,3 +153,7 @@ func (c *Control) KillPendingTunnel(vpnIp net.IP) bool {
 	c.f.handshakeManager.pendingHostMap.DeleteHostInfo(hostinfo)
 	return true
 }
+
+func (c *Control) GetInterface() *Interface {
+	return c.f
+}

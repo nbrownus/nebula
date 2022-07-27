@@ -153,6 +153,7 @@ func (r *R) renderFlow() {
 	if err != nil {
 		panic(err)
 	}
+	defer f.Close()
 
 	var participants = map[string]struct{}{}
 	var participansVals []string

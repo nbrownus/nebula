@@ -356,9 +356,9 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 
 	if existingHostInfo != nil {
 		// We are going to overwrite this entry, so remove the old references
-		delete(c.mainHostMap.Hosts, existingHostInfo.vpnIp)
-		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
-		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
+		//delete(c.mainHostMap.Hosts, existingHostInfo.vpnIp)
+		//delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
+		//delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
 		for _, relayIdx := range existingHostInfo.relayState.CopyRelayForIdxs() {
 			delete(c.mainHostMap.Relays, relayIdx)
 		}

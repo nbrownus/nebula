@@ -188,6 +188,26 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 			continue
 		}
 
+		//atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(&hostinfo.ConnectionState.certState)), unsafe.Pointer(&n.intf.certState))
+		//TODO: make this atomic like the above would maybe work to do
+		if hostinfo.ConnectionState.certState != n.intf.certState {
+			n.l.Error("REHANDSHAKING", hostinfo.ConnectionState.certState, n.intf.certState)
+			//TODO: this is copied from getOrHandshake to keep the extra checks out of the hot path, figure it out
+			hostinfo = n.intf.handshakeManager.AddVpnIp(vpnIp, n.intf.initHostInfo)
+			ixHandshakeStage0(n.intf, vpnIp, hostinfo)
+
+			// If this is a static host, we don't need to wait for the HostQueryReply
+			// We can trigger the handshake right now
+			if _, ok := n.intf.lightHouse.GetStaticHostList()[vpnIp]; ok {
+				select {
+				case n.intf.handshakeManager.trigger <- vpnIp:
+				default:
+				}
+			}
+
+			hostinfo.ConnectionState.certState = n.intf.certState
+		}
+
 		// If we saw an incoming packets from this ip and peer's certificate is not
 		// expired, just ignore.
 		if traf {
