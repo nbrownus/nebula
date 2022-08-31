@@ -4,10 +4,11 @@
 package overlay
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"syscall"
 	"unsafe"
@@ -22,7 +23,7 @@ import (
 type tun struct {
 	io.ReadWriteCloser
 	Device     string
-	cidr       *net.IPNet
+	cidr       netip.Prefix
 	DefaultMTU int
 	Routes     []Route
 	routeTree  *cidr.Tree4
@@ -77,7 +78,7 @@ type ifreqMTU struct {
 	pad  [8]byte
 }
 
-func newTun(l *logrus.Logger, name string, cidr *net.IPNet, defaultMTU int, routes []Route, _ int, _ bool) (*tun, error) {
+func newTun(l *logrus.Logger, name string, cidr netip.Prefix, defaultMTU int, routes []Route, _ int, _ bool) (*tun, error) {
 	routeTree, err := makeRouteTree(l, routes, false)
 	if err != nil {
 		return nil, err
@@ -170,7 +171,7 @@ func (t *tun) deviceBytes() (o [16]byte) {
 	return
 }
 
-func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int) (*tun, error) {
+func newTunFromFd(_ *logrus.Logger, _ int, _ netip.Prefix, _ int, _ []Route, _ int) (*tun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported in Darwin")
 }
 
@@ -184,10 +185,16 @@ func (t *tun) Close() error {
 func (t *tun) Activate() error {
 	devName := t.deviceBytes()
 
-	var addr, mask [4]byte
+	var mask [4]byte
 
-	copy(addr[:], t.cidr.IP.To4())
-	copy(mask[:], t.cidr.Mask)
+	addr := t.cidr.Addr().As4()
+
+	// Calculate the netmask
+	a := uint32(0)
+	for i := 31; i >= (len(addr)*8)-t.cidr.Bits(); i-- {
+		a += 1 << i
+	}
+	binary.BigEndian.PutUint32(mask[:], a)
 
 	s, err := unix.Socket(
 		unix.AF_INET,
@@ -286,27 +293,28 @@ func (t *tun) Activate() error {
 	}
 
 	// Unsafe path routes
-	for _, r := range t.Routes {
-		if r.Via == nil {
-			// We don't allow route MTUs so only install routes with a via
-			continue
-		}
-
-		copy(routeAddr.IP[:], r.Cidr.IP.To4())
-		copy(maskAddr.IP[:], net.IP(r.Cidr.Mask).To4())
-
-		err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
-		if err != nil {
-			if errors.Is(err, unix.EEXIST) {
-				t.l.WithField("route", r.Cidr).
-					Warnf("unable to add unsafe_route, identical route already exists")
-			} else {
-				return err
-			}
-		}
-
-		// TODO how to set metric
-	}
+	//TODO!
+	//for _, r := range t.Routes {
+	//	if r.Via == nil {
+	//		// We don't allow route MTUs so only install routes with a via
+	//		continue
+	//	}
+	//
+	//	copy(routeAddr.IP[:], r.Cidr.Addr().As4()[:])
+	//	copy(maskAddr.IP[:], net.IP(r.Cidr.Mask).To4())
+	//
+	//	err = addRoute(routeSock, routeAddr, maskAddr, linkAddr)
+	//	if err != nil {
+	//		if errors.Is(err, unix.EEXIST) {
+	//			t.l.WithField("route", r.Cidr).
+	//				Warnf("unable to add unsafe_route, identical route already exists")
+	//		} else {
+	//			return err
+	//		}
+	//	}
+	//
+	//	// TODO how to set metric
+	//}
 
 	return nil
 }
@@ -412,7 +420,7 @@ func (t *tun) Write(from []byte) (int, error) {
 	return n - 4, err
 }
 
-func (t *tun) Cidr() *net.IPNet {
+func (t *tun) Cidr() netip.Prefix {
 	return t.cidr
 }
 

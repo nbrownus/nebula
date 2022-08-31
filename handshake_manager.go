@@ -6,7 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"net"
+	"net/netip"
 	"time"
 
 	"github.com/rcrowley/go-metrics"
@@ -57,7 +57,7 @@ type HandshakeManager struct {
 	trigger chan iputil.VpnIp
 }
 
-func NewHandshakeManager(l *logrus.Logger, tunCidr *net.IPNet, preferredRanges []*net.IPNet, mainHostMap *HostMap, lightHouse *LightHouse, outside *udp.Conn, config HandshakeConfig) *HandshakeManager {
+func NewHandshakeManager(l *logrus.Logger, tunCidr netip.Prefix, preferredRanges []netip.Prefix, mainHostMap *HostMap, lightHouse *LightHouse, outside *udp.Conn, config HandshakeConfig) *HandshakeManager {
 	return &HandshakeManager{
 		pendingHostMap:         NewHostMap(l, "pending", tunCidr, preferredRanges),
 		mainHostMap:            mainHostMap,
@@ -162,8 +162,8 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 	}
 
 	// Send a the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
-	var sentTo []*udp.Addr
-	hostinfo.remotes.ForEach(c.pendingHostMap.preferredRanges, func(addr *udp.Addr, _ bool) {
+	var sentTo []netip.AddrPort
+	hostinfo.remotes.ForEach(c.pendingHostMap.preferredRanges, func(addr netip.AddrPort, _ bool) {
 		c.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
 		err = c.outside.WriteTo(hostinfo.HandshakePacket[0], addr)
 		if err != nil {
@@ -194,7 +194,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 				continue
 			}
 			relayHostInfo, err := c.mainHostMap.QueryVpnIp(*relay)
-			if err != nil || relayHostInfo.remote == nil {
+			if err != nil || !relayHostInfo.remote.IsValid() {
 				hostinfo.logger(c.l).WithError(err).WithField("relay", relay.String()).Info("Establish tunnel to relay target.")
 				f.Handshake(*relay)
 				continue
@@ -231,7 +231,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 				}
 			} else {
 				// No relays exist or requested yet.
-				if relayHostInfo.remote != nil {
+				if relayHostInfo.remote.IsValid() {
 					idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, vpnIp, nil, TerminalType, Requested)
 					if err != nil {
 						hostinfo.logger(c.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")

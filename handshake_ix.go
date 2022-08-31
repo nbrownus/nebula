@@ -1,13 +1,13 @@
 package nebula
 
 import (
+	"net/netip"
 	"sync/atomic"
 	"time"
 
 	"github.com/flynn/noise"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
-	"github.com/slackhq/nebula/udp"
 )
 
 // NOISE IX Handshakes
@@ -18,7 +18,7 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 	// This queries the lighthouse if we don't know a remote for the host
 	// We do it here to provoke the lighthouse to preempt our timer wheel and trigger the stage 1 packet to send
 	// more quickly, effect is a quicker handshake.
-	if hostinfo.remote == nil {
+	if !hostinfo.remote.IsValid() {
 		f.lightHouse.QueryServer(vpnIp, f)
 	}
 
@@ -69,7 +69,7 @@ func ixHandshakeStage0(f *Interface, vpnIp iputil.VpnIp, hostinfo *HostInfo) {
 	hostinfo.handshakeStart = time.Now()
 }
 
-func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []byte, h *header.H) {
+func ixHandshakeStage1(f *Interface, addr netip.AddrPort, via interface{}, packet []byte, h *header.H) {
 	ci := f.newConnectionState(f.l, false, noise.HandshakeIX, []byte{}, 0)
 	// Mark packet 1 as seen so it doesn't show up as missed
 	ci.window.Update(f.l, 1)
@@ -113,8 +113,8 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 		return
 	}
 
-	if addr != nil {
-		if !f.lightHouse.GetRemoteAllowList().Allow(vpnIp, addr.IP) {
+	if addr.IsValid() {
+		if !f.lightHouse.GetRemoteAllowList().Allow(vpnIp, addr.Addr()) {
 			f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 			return
 		}
@@ -230,7 +230,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 
 			msg = existing.HandshakePacket[2]
 			f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
-			if addr != nil {
+			if addr.IsValid() {
 				err := f.outside.WriteTo(msg, addr)
 				if err != nil {
 					f.l.WithField("vpnIp", existing.vpnIp).WithField("udpAddr", addr).
@@ -307,7 +307,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 
 	// Do the send
 	f.messageMetrics.Tx(header.Handshake, header.MessageSubType(msg[1]), 1)
-	if addr != nil {
+	if addr.IsValid() {
 		err = f.outside.WriteTo(msg, addr)
 		if err != nil {
 			f.l.WithField("vpnIp", vpnIp).WithField("udpAddr", addr).
@@ -350,7 +350,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 	return
 }
 
-func ixHandshakeStage2(f *Interface, addr *udp.Addr, via interface{}, hostinfo *HostInfo, packet []byte, h *header.H) bool {
+func ixHandshakeStage2(f *Interface, addr netip.AddrPort, via interface{}, hostinfo *HostInfo, packet []byte, h *header.H) bool {
 	if hostinfo == nil {
 		// Nothing here to tear down, got a bogus stage 2 packet
 		return true
@@ -359,8 +359,8 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via interface{}, hostinfo *
 	hostinfo.Lock()
 	defer hostinfo.Unlock()
 
-	if addr != nil {
-		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnIp, addr.IP) {
+	if addr.IsValid() {
+		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnIp, addr.Addr()) {
 			f.l.WithField("vpnIp", hostinfo.vpnIp).WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 			return false
 		}
@@ -491,7 +491,7 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via interface{}, hostinfo *
 	ci.eKey = NewNebulaCipherState(eKey)
 
 	// Make sure the current udpAddr being used is set for responding
-	if addr != nil {
+	if addr.IsValid() {
 		hostinfo.SetRemote(addr)
 	} else {
 		via2 := via.(*ViaSender)

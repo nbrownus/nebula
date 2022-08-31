@@ -224,10 +224,12 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			f.getOrHandshake(target)
 			return
 		}
-		if peer.remote == nil {
+
+		if !peer.remote.IsValid() {
 			// Only create relays to peers for whom I have a direct connection
 			return
 		}
+
 		sendCreateRequest := false
 		var index uint32
 		targetRelay, ok := peer.relayState.QueryRelayForByIp(from)

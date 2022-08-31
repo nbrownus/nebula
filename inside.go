@@ -1,6 +1,8 @@
 package nebula
 
 import (
+	"net/netip"
+	"runtime/debug"
 	"sync/atomic"
 
 	"github.com/flynn/noise"
@@ -8,12 +10,11 @@ import (
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
-	"github.com/slackhq/nebula/udp"
 )
 
 func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet, nb, out []byte, q int, localCache firewall.ConntrackCache) {
 	err := newPacket(packet, false, fwPacket)
-	if err != nil {
+	if err != nil && f.l.Level >= logrus.DebugLevel {
 		f.l.WithField("packet", packet).Debugf("Error while validating outbound packet: %s", err)
 		return
 	}
@@ -68,7 +69,7 @@ func (f *Interface) consumeInsidePacket(packet []byte, fwPacket *firewall.Packet
 
 	dropReason := f.firewall.Drop(packet, *fwPacket, false, hostinfo, f.caPool, localCache)
 	if dropReason == nil {
-		f.sendNoMetrics(header.Message, 0, ci, hostinfo, nil, packet, nb, out, q)
+		f.sendNoMetrics(header.Message, 0, ci, hostinfo, netip.AddrPort{}, packet, nb, out, q)
 
 	} else if f.l.Level >= logrus.DebugLevel {
 		hostinfo.logger(f.l).
@@ -84,8 +85,7 @@ func (f *Interface) Handshake(vpnIp iputil.VpnIp) {
 
 // getOrHandshake returns nil if the vpnIp is not routable
 func (f *Interface) getOrHandshake(vpnIp iputil.VpnIp) *HostInfo {
-	//TODO: we can find contains without converting back to bytes
-	if f.hostMap.vpnCIDR.Contains(vpnIp.ToIP()) == false {
+	if !ipMaskContains(f.lightHouse.myVpnIp, f.lightHouse.myVpnZeros, vpnIp) {
 		vpnIp = f.inside.RouteFor(vpnIp)
 		if vpnIp == 0 {
 			return nil
@@ -160,7 +160,7 @@ func (f *Interface) sendMessageNow(t header.MessageType, st header.MessageSubTyp
 		return
 	}
 
-	f.sendNoMetrics(header.Message, st, hostInfo.ConnectionState, hostInfo, nil, p, nb, out, 0)
+	f.sendNoMetrics(header.Message, st, hostInfo.ConnectionState, hostInfo, netip.AddrPort{}, p, nb, out, 0)
 }
 
 // SendMessageToVpnIp handles real ip:port lookup and sends to the current best known address for vpnIp
@@ -196,10 +196,10 @@ func (f *Interface) sendMessageToVpnIp(t header.MessageType, st header.MessageSu
 
 func (f *Interface) send(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
-	f.sendNoMetrics(t, st, ci, hostinfo, nil, p, nb, out, 0)
+	f.sendNoMetrics(t, st, ci, hostinfo, netip.AddrPort{}, p, nb, out, 0)
 }
 
-func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udp.Addr, p, nb, out []byte) {
+func (f *Interface) sendTo(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte) {
 	f.messageMetrics.Tx(t, st, 1)
 	f.sendNoMetrics(t, st, ci, hostinfo, remote, p, nb, out, 0)
 }
@@ -260,12 +260,12 @@ func (f *Interface) SendVia(viaIfc interface{},
 	}
 }
 
-func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote *udp.Addr, p, nb, out []byte, q int) {
+func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType, ci *ConnectionState, hostinfo *HostInfo, remote netip.AddrPort, p, nb, out []byte, q int) {
 	if ci.eKey == nil {
 		//TODO: log warning
 		return
 	}
-	useRelay := remote == nil && hostinfo.remote == nil
+	useRelay := !remote.IsValid() && !hostinfo.remote.IsValid()
 	fullOut := out
 
 	if useRelay {
@@ -310,13 +310,14 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		return
 	}
 
-	if remote != nil {
+	if remote.IsValid() {
 		err = f.writers[q].WriteTo(out, remote)
 		if err != nil {
+			debug.PrintStack()
 			hostinfo.logger(f.l).WithError(err).
 				WithField("udpAddr", remote).Error("Failed to write outgoing packet")
 		}
-	} else if hostinfo.remote != nil {
+	} else if hostinfo.remote.IsValid() {
 		err = f.writers[q].WriteTo(out, hostinfo.remote)
 		if err != nil {
 			hostinfo.logger(f.l).WithError(err).

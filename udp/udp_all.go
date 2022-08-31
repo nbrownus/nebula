@@ -2,8 +2,10 @@ package udp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 )
 
@@ -20,11 +22,11 @@ func NewAddr(ip net.IP, port uint16) *Addr {
 	return &addr
 }
 
-func NewAddrFromString(s string) *Addr {
-	ip, port, err := ParseIPAndPort(s)
+func NewAddrFromString(s string) netip.AddrPort {
+	addr, err := ParseIPAndPort(s)
 	//TODO: handle err
 	_ = err
-	return &Addr{IP: ip.To16(), Port: port}
+	return addr
 }
 
 func (ua *Addr) Equals(t *Addr) bool {
@@ -64,21 +66,26 @@ func (ua *Addr) Copy() *Addr {
 	return &nu
 }
 
-func ParseIPAndPort(s string) (net.IP, uint16, error) {
+func ParseIPAndPort(s string) (netip.AddrPort, error) {
 	rIp, sPort, err := net.SplitHostPort(s)
 	if err != nil {
-		return nil, 0, err
+		return netip.AddrPort{}, err
 	}
 
-	addr, err := net.ResolveIPAddr("ip", rIp)
+	rAddr, err := net.ResolveIPAddr("ip", rIp)
 	if err != nil {
-		return nil, 0, err
+		return netip.AddrPort{}, err
 	}
 
 	iPort, err := strconv.Atoi(sPort)
 	if err != nil {
-		return nil, 0, err
+		return netip.AddrPort{}, err
 	}
 
-	return addr.IP, uint16(iPort), nil
+	addr, ok := netip.AddrFromSlice(rAddr.IP)
+	if !ok {
+		return netip.AddrPort{}, errors.New("could not create netip addr from ip addr")
+	}
+
+	return netip.AddrPortFrom(addr, uint16(iPort)), nil
 }

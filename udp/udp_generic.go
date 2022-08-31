@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
@@ -35,8 +36,8 @@ func NewListener(l *logrus.Logger, ip string, port int, multi bool, batch int) (
 	return nil, fmt.Errorf("Unexpected PacketConn: %T %#v", pc, pc)
 }
 
-func (uc *Conn) WriteTo(b []byte, addr *Addr) error {
-	_, err := uc.UDPConn.WriteToUDP(b, &net.UDPAddr{IP: addr.IP, Port: int(addr.Port)})
+func (uc *Conn) WriteTo(b []byte, addr netip.AddrPort) error {
+	_, err := uc.UDPConn.WriteToUDPAddrPort(b, addr)
 	return err
 }
 
@@ -73,19 +74,16 @@ func (u *Conn) ListenOut(r EncReader, lhf LightHouseHandlerFunc, cache *firewall
 	buffer := make([]byte, MTU)
 	h := &header.H{}
 	fwPacket := &firewall.Packet{}
-	udpAddr := &Addr{IP: make([]byte, 16)}
 	nb := make([]byte, 12, 12)
 
 	for {
 		// Just read one packet at a time
-		n, rua, err := u.ReadFromUDP(buffer)
+		n, addr, err := u.ReadFromUDPAddrPort(buffer)
 		if err != nil {
 			u.l.WithError(err).Error("Failed to read packets")
 			continue
 		}
 
-		udpAddr.IP = rua.IP
-		udpAddr.Port = uint16(rua.Port)
-		r(udpAddr, nil, plaintext[:0], buffer[:n], h, fwPacket, lhf, nb, q, cache.Get(u.l))
+		r(addr, nil, plaintext[:0], buffer[:n], h, fwPacket, lhf, nb, q, cache.Get(u.l))
 	}
 }

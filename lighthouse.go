@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,18 +26,13 @@ import (
 
 var ErrHostNotKnown = errors.New("host not known")
 
-type netIpAndPort struct {
-	ip   net.IP
-	port uint16
-}
-
 type LightHouse struct {
 	//TODO: We need a timer wheel to kick out vpnIps that haven't reported in a long time
 	sync.RWMutex //Because we concurrently read and write to our maps
 	amLighthouse bool
 	myVpnIp      iputil.VpnIp
-	myVpnZeros   iputil.VpnIp
-	myVpnNet     *net.IPNet
+	myVpnZeros   uint32
+	myVpnNet     netip.Prefix
 	punchConn    *udp.Conn
 	punchy       *Punchy
 
@@ -68,7 +64,7 @@ type LightHouse struct {
 	updateUdp       udp.EncWriter
 	nebulaPort      uint32 // 32 bits because protobuf does not have a uint16
 
-	atomicAdvertiseAddrs []netIpAndPort
+	atomicAdvertiseAddrs []netip.AddrPort
 
 	// IP's of relays that can be used by peers to access me
 	atomicRelaysForMe []iputil.VpnIp
@@ -80,7 +76,7 @@ type LightHouse struct {
 
 // NewLightHouseFromConfig will build a Lighthouse struct from the values provided in the config object
 // addrMap should be nil unless this is during a config reload
-func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet, pc *udp.Conn, p *Punchy) (*LightHouse, error) {
+func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet netip.Prefix, pc *udp.Conn, p *Punchy) (*LightHouse, error) {
 	amLighthouse := c.GetBool("lighthouse.am_lighthouse", false)
 	nebulaPort := uint32(c.GetInt("listen.port", 0))
 	if amLighthouse && nebulaPort == 0 {
@@ -93,14 +89,15 @@ func NewLightHouseFromConfig(l *logrus.Logger, c *config.C, myVpnNet *net.IPNet,
 		if err != nil {
 			return nil, util.NewContextualError("Failed to get listening port", nil, err)
 		}
-		nebulaPort = uint32(uPort.Port)
+		nebulaPort = uint32(uPort.Port())
 	}
 
-	ones, _ := myVpnNet.Mask.Size()
+	n, _ := netip.ParsePrefix("192.168.0.0/24")
+	n.Bits()
 	h := LightHouse{
 		amLighthouse:      amLighthouse,
-		myVpnIp:           iputil.Ip2VpnIp(myVpnNet.IP),
-		myVpnZeros:        iputil.VpnIp(32 - ones),
+		myVpnIp:           iputil.NetIpToVpnIp(myVpnNet.Addr()),
+		myVpnZeros:        uint32(32 - myVpnNet.Bits()),
 		myVpnNet:          myVpnNet,
 		addrMap:           make(map[iputil.VpnIp]*RemoteList),
 		nebulaPort:        nebulaPort,
@@ -152,8 +149,8 @@ func (lh *LightHouse) GetLocalAllowList() *LocalAllowList {
 	return (*LocalAllowList)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicLocalAllowList))))
 }
 
-func (lh *LightHouse) GetAdvertiseAddrs() []netIpAndPort {
-	return *(*[]netIpAndPort)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicAdvertiseAddrs))))
+func (lh *LightHouse) GetAdvertiseAddrs() []netip.AddrPort {
+	return *(*[]netip.AddrPort)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicAdvertiseAddrs))))
 }
 
 func (lh *LightHouse) GetRelaysForMe() []iputil.VpnIp {
@@ -167,25 +164,25 @@ func (lh *LightHouse) GetUpdateInterval() int64 {
 func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	if initial || c.HasChanged("lighthouse.advertise_addrs") {
 		rawAdvAddrs := c.GetStringSlice("lighthouse.advertise_addrs", []string{})
-		advAddrs := make([]netIpAndPort, 0)
+		advAddrs := make([]netip.AddrPort, 0)
 
 		for i, rawAddr := range rawAdvAddrs {
-			fIp, fPort, err := udp.ParseIPAndPort(rawAddr)
+			addr, err := udp.ParseIPAndPort(rawAddr)
 			if err != nil {
 				return util.NewContextualError("Unable to parse lighthouse.advertise_addrs entry", m{"addr": rawAddr, "entry": i + 1}, err)
 			}
 
-			if fPort == 0 {
-				fPort = uint16(lh.nebulaPort)
+			if addr.Port() == 0 {
+				addr = netip.AddrPortFrom(addr.Addr(), uint16(lh.nebulaPort))
 			}
 
-			if ip4 := fIp.To4(); ip4 != nil && lh.myVpnNet.Contains(fIp) {
+			if lh.myVpnNet.Contains(addr.Addr()) {
 				lh.l.WithField("addr", rawAddr).WithField("entry", i+1).
 					Warn("Ignoring lighthouse.advertise_addrs report because it is within the nebula network range")
 				continue
 			}
 
-			advAddrs = append(advAddrs, netIpAndPort{ip: fIp, port: fPort})
+			advAddrs = append(advAddrs, addr)
 		}
 
 		atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&lh.atomicAdvertiseAddrs)), unsafe.Pointer(&advAddrs))
@@ -239,7 +236,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	//NOTE: many things will get much simpler when we combine static_host_map and lighthouse.hosts in config
 	if initial || c.HasChanged("static_host_map") {
 		staticList := make(map[iputil.VpnIp]struct{})
-		err := lh.loadStaticMap(c, lh.myVpnNet, staticList)
+		err := lh.loadStaticMap(c, staticList)
 		if err != nil {
 			return err
 		}
@@ -254,7 +251,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 
 	if initial || c.HasChanged("lighthouse.hosts") {
 		lhMap := make(map[iputil.VpnIp]struct{})
-		err := lh.parseLighthouses(c, lh.myVpnNet, lhMap)
+		err := lh.parseLighthouses(c, lhMap)
 		if err != nil {
 			return err
 		}
@@ -292,21 +289,21 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 	return nil
 }
 
-func (lh *LightHouse) parseLighthouses(c *config.C, tunCidr *net.IPNet, lhMap map[iputil.VpnIp]struct{}) error {
+func (lh *LightHouse) parseLighthouses(c *config.C, lhMap map[iputil.VpnIp]struct{}) error {
 	lhs := c.GetStringSlice("lighthouse.hosts", []string{})
 	if lh.amLighthouse && len(lhs) != 0 {
 		lh.l.Warn("lighthouse.am_lighthouse enabled on node but upstream lighthouses exist in config")
 	}
 
 	for i, host := range lhs {
-		ip := net.ParseIP(host)
-		if ip == nil {
-			return util.NewContextualError("Unable to parse lighthouse host entry", m{"host": host, "entry": i + 1}, nil)
+		ip, err := netip.ParseAddr(host)
+		if err != nil {
+			return util.NewContextualError("Unable to parse lighthouse host entry", m{"host": host, "entry": i + 1}, err)
 		}
-		if !tunCidr.Contains(ip) {
-			return util.NewContextualError("lighthouse host is not in our subnet, invalid", m{"vpnIp": ip, "network": tunCidr.String()}, nil)
+		if !lh.myVpnNet.Contains(ip) {
+			return util.NewContextualError("lighthouse host is not in our subnet, invalid", m{"vpnIp": ip, "network": lh.myVpnNet.String()}, nil)
 		}
-		lhMap[iputil.Ip2VpnIp(ip)] = struct{}{}
+		lhMap[iputil.NetIpToVpnIp(ip)] = struct{}{}
 	}
 
 	if !lh.amLighthouse && len(lhMap) == 0 {
@@ -323,37 +320,37 @@ func (lh *LightHouse) parseLighthouses(c *config.C, tunCidr *net.IPNet, lhMap ma
 	return nil
 }
 
-func (lh *LightHouse) loadStaticMap(c *config.C, tunCidr *net.IPNet, staticList map[iputil.VpnIp]struct{}) error {
+func (lh *LightHouse) loadStaticMap(c *config.C, staticList map[iputil.VpnIp]struct{}) error {
 	shm := c.GetMap("static_host_map", map[interface{}]interface{}{})
 	i := 0
 
 	for k, v := range shm {
-		rip := net.ParseIP(fmt.Sprintf("%v", k))
-		if rip == nil {
-			return util.NewContextualError("Unable to parse static_host_map entry", m{"host": k, "entry": i + 1}, nil)
+		rip, err := netip.ParseAddr(fmt.Sprintf("%v", k))
+		if err != nil {
+			return util.NewContextualError("Unable to parse static_host_map entry", m{"host": k, "entry": i + 1}, err)
 		}
 
-		if !tunCidr.Contains(rip) {
-			return util.NewContextualError("static_host_map key is not in our subnet, invalid", m{"vpnIp": rip, "network": tunCidr.String(), "entry": i + 1}, nil)
+		if !lh.myVpnNet.Contains(rip) {
+			return util.NewContextualError("static_host_map key is not in our subnet, invalid", m{"vpnIp": rip, "network": lh.myVpnNet.String(), "entry": i + 1}, nil)
 		}
 
-		vpnIp := iputil.Ip2VpnIp(rip)
+		vpnIp := iputil.NetIpToVpnIp(rip)
 		vals, ok := v.([]interface{})
 		if ok {
 			for _, v := range vals {
-				ip, port, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
+				addr, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
 				if err != nil {
 					return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
 				}
-				lh.addStaticRemote(vpnIp, udp.NewAddr(ip, port), staticList)
+				lh.addStaticRemote(vpnIp, addr, staticList)
 			}
 
 		} else {
-			ip, port, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
+			addr, err := udp.ParseIPAndPort(fmt.Sprintf("%v", v))
 			if err != nil {
 				return util.NewContextualError("Static host address could not be parsed", m{"vpnIp": vpnIp, "entry": i + 1}, err)
 			}
-			lh.addStaticRemote(vpnIp, udp.NewAddr(ip, port), staticList)
+			lh.addStaticRemote(vpnIp, addr, staticList)
 		}
 		i++
 	}
@@ -460,23 +457,23 @@ func (lh *LightHouse) DeleteVpnIp(vpnIp iputil.VpnIp) {
 // AddStaticRemote adds a static host entry for vpnIp as ourselves as the owner
 // We are the owner because we don't want a lighthouse server to advertise for static hosts it was configured with
 // And we don't want a lighthouse query reply to interfere with our learned cache if we are a client
-//NOTE: this function should not interact with any hot path objects, like lh.staticList, the caller should handle it
-func (lh *LightHouse) addStaticRemote(vpnIp iputil.VpnIp, toAddr *udp.Addr, staticList map[iputil.VpnIp]struct{}) {
+// NOTE: this function should not interact with any hot path objects, like lh.staticList, the caller should handle it
+func (lh *LightHouse) addStaticRemote(vpnIp iputil.VpnIp, toAddr netip.AddrPort, staticList map[iputil.VpnIp]struct{}) {
 	lh.Lock()
 	am := lh.unlockedGetRemoteList(vpnIp)
 	am.Lock()
 	defer am.Unlock()
 	lh.Unlock()
 
-	if ipv4 := toAddr.IP.To4(); ipv4 != nil {
-		to := NewIp4AndPort(ipv4, uint32(toAddr.Port))
+	if toAddr.Addr().Is4() {
+		to := NewIp4AndPort(toAddr)
 		if !lh.unlockedShouldAddV4(vpnIp, to) {
 			return
 		}
 		am.unlockedPrependV4(lh.myVpnIp, to)
 
 	} else {
-		to := NewIp6AndPort(toAddr.IP, uint32(toAddr.Port))
+		to := NewIp6AndPort(toAddr)
 		if !lh.unlockedShouldAddV6(vpnIp, to) {
 			return
 		}
@@ -549,17 +546,19 @@ func NewLhQueryByInt(VpnIp iputil.VpnIp) *NebulaMeta {
 	}
 }
 
-func NewIp4AndPort(ip net.IP, port uint32) *Ip4AndPort {
-	ipp := Ip4AndPort{Port: port}
-	ipp.Ip = uint32(iputil.Ip2VpnIp(ip))
-	return &ipp
+func NewIp4AndPort(addr netip.AddrPort) *Ip4AndPort {
+	return &Ip4AndPort{
+		Ip:   uint32(iputil.NetIpToVpnIp(addr.Addr())),
+		Port: uint32(addr.Port()),
+	}
 }
 
-func NewIp6AndPort(ip net.IP, port uint32) *Ip6AndPort {
+func NewIp6AndPort(addr netip.AddrPort) *Ip6AndPort {
+	ip := addr.Addr().As16()
 	return &Ip6AndPort{
 		Hi:   binary.BigEndian.Uint64(ip[:8]),
 		Lo:   binary.BigEndian.Uint64(ip[8:]),
-		Port: port,
+		Port: uint32(addr.Port()),
 	}
 }
 
@@ -573,6 +572,24 @@ func NewUDPAddrFromLH4(ipp *Ip4AndPort) *udp.Addr {
 
 func NewUDPAddrFromLH6(ipp *Ip6AndPort) *udp.Addr {
 	return udp.NewAddr(lhIp6ToIp(ipp), uint16(ipp.Port))
+}
+
+func NewNetAddrPortFromLH4(ipp *Ip4AndPort) netip.AddrPort {
+	ip := ipp.Ip
+	return netip.AddrPortFrom(
+		netip.AddrFrom4([4]byte{byte(ip & 0xff000000 >> 24), byte(ip & 0x00ff0000 >> 16), byte(ip & 0x0000ff00 >> 8), byte(ip & 0x000000ff)}),
+		uint16(ipp.Port),
+	)
+}
+
+func NewNetAddrPortFromLH6(ipp *Ip6AndPort) netip.AddrPort {
+	ip := [16]byte{}
+	binary.BigEndian.PutUint64(ip[:8], ipp.Hi)
+	binary.BigEndian.PutUint64(ip[8:], ipp.Lo)
+	return netip.AddrPortFrom(
+		netip.AddrFrom16(ip),
+		uint16(ipp.Port),
+	)
 }
 
 func (lh *LightHouse) LhUpdateWorker(ctx context.Context, f udp.EncWriter) {
@@ -606,24 +623,25 @@ func (lh *LightHouse) SendUpdate(f udp.EncWriter) {
 	var v6 []*Ip6AndPort
 
 	for _, e := range lh.GetAdvertiseAddrs() {
-		if ip := e.ip.To4(); ip != nil {
-			v4 = append(v4, NewIp4AndPort(e.ip, uint32(e.port)))
+		if e.Addr().Is4() {
+			v4 = append(v4, NewIp4AndPort(e))
 		} else {
-			v6 = append(v6, NewIp6AndPort(e.ip, uint32(e.port)))
+			v6 = append(v6, NewIp6AndPort(e))
 		}
 	}
 
 	lal := lh.GetLocalAllowList()
-	for _, e := range *localIps(lh.l, lal) {
-		if ip4 := e.To4(); ip4 != nil && ipMaskContains(lh.myVpnIp, lh.myVpnZeros, iputil.Ip2VpnIp(ip4)) {
+	for _, e := range localIps(lh.l, lal) {
+		if lh.myVpnNet.Contains(e) {
 			continue
 		}
 
 		// Only add IPs that aren't my VPN/tun IP
-		if ip := e.To4(); ip != nil {
-			v4 = append(v4, NewIp4AndPort(e, lh.nebulaPort))
+		if e.Is4() {
+
+			v4 = append(v4, NewIp4AndPort(netip.AddrPortFrom(e, uint16(lh.nebulaPort))))
 		} else {
-			v6 = append(v6, NewIp6AndPort(e, lh.nebulaPort))
+			v6 = append(v6, NewIp6AndPort(netip.AddrPortFrom(e, uint16(lh.nebulaPort))))
 		}
 	}
 
@@ -706,7 +724,7 @@ func (lhh *LightHouseHandler) resetMeta() *NebulaMeta {
 	return lhh.meta
 }
 
-func (lhh *LightHouseHandler) HandleRequest(rAddr *udp.Addr, vpnIp iputil.VpnIp, p []byte, w udp.EncWriter) {
+func (lhh *LightHouseHandler) HandleRequest(rAddr netip.AddrPort, vpnIp iputil.VpnIp, p []byte, w udp.EncWriter) {
 	n := lhh.resetMeta()
 	err := n.Unmarshal(p)
 	if err != nil {
@@ -741,7 +759,7 @@ func (lhh *LightHouseHandler) HandleRequest(rAddr *udp.Addr, vpnIp iputil.VpnIp,
 	}
 }
 
-func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp, addr *udp.Addr, w udp.EncWriter) {
+func (lhh *LightHouseHandler) handleHostQuery(n *NebulaMeta, vpnIp iputil.VpnIp, addr netip.AddrPort, w udp.EncWriter) {
 	// Exit if we don't answer queries
 	if !lhh.lh.amLighthouse {
 		if lhh.l.Level >= logrus.DebugLevel {
@@ -880,8 +898,8 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp i
 	}
 
 	empty := []byte{0}
-	punch := func(vpnPeer *udp.Addr) {
-		if vpnPeer == nil {
+	punch := func(vpnPeer netip.AddrPort) {
+		if !vpnPeer.IsValid() {
 			return
 		}
 
@@ -898,11 +916,11 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp i
 	}
 
 	for _, a := range n.Details.Ip4AndPorts {
-		punch(NewUDPAddrFromLH4(a))
+		punch(NewNetAddrPortFromLH4(a))
 	}
 
 	for _, a := range n.Details.Ip6AndPorts {
-		punch(NewUDPAddrFromLH6(a))
+		punch(NewNetAddrPortFromLH6(a))
 	}
 
 	// This sends a nebula test packet to the host trying to contact us. In the case
@@ -925,6 +943,6 @@ func (lhh *LightHouseHandler) handleHostPunchNotification(n *NebulaMeta, vpnIp i
 
 // ipMaskContains checks if testIp is contained by ip after applying a cidr
 // zeros is 32 - bits from net.IPMask.Size()
-func ipMaskContains(ip iputil.VpnIp, zeros iputil.VpnIp, testIp iputil.VpnIp) bool {
+func ipMaskContains(ip iputil.VpnIp, zeros uint32, testIp iputil.VpnIp) bool {
 	return (testIp^ip)>>zeros == 0
 }

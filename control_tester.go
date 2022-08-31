@@ -5,6 +5,7 @@ package nebula
 
 import (
 	"net"
+	"net/netip"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -48,34 +49,34 @@ func (c *Control) WaitForTypeByIndex(toIndex uint32, msgType header.MessageType,
 
 // InjectLightHouseAddr will push toAddr into the local lighthouse cache for the vpnIp
 // This is necessary if you did not configure static hosts or are not running a lighthouse
-func (c *Control) InjectLightHouseAddr(vpnIp net.IP, toAddr *net.UDPAddr) {
+func (c *Control) InjectLightHouseAddr(vpnIp netip.Addr, toAddr netip.AddrPort) {
+	rVpnIp := iputil.NetIpToVpnIp(vpnIp)
 	c.f.lightHouse.Lock()
-	remoteList := c.f.lightHouse.unlockedGetRemoteList(iputil.Ip2VpnIp(vpnIp))
+	remoteList := c.f.lightHouse.unlockedGetRemoteList(rVpnIp)
 	remoteList.Lock()
 	defer remoteList.Unlock()
 	c.f.lightHouse.Unlock()
 
-	iVpnIp := iputil.Ip2VpnIp(vpnIp)
-	if v4 := toAddr.IP.To4(); v4 != nil {
-		remoteList.unlockedPrependV4(iVpnIp, NewIp4AndPort(v4, uint32(toAddr.Port)))
+	if toAddr.Addr().Is4() {
+		remoteList.unlockedPrependV4(rVpnIp, NewIp4AndPort(toAddr))
 	} else {
-		remoteList.unlockedPrependV6(iVpnIp, NewIp6AndPort(toAddr.IP, uint32(toAddr.Port)))
+		remoteList.unlockedPrependV6(rVpnIp, NewIp6AndPort(toAddr))
 	}
 }
 
 // InjectRelays will push relayVpnIps into the local lighthouse cache for the vpnIp
 // This is necessary to inform an initiator of possible relays for communicating with a responder
-func (c *Control) InjectRelays(vpnIp net.IP, relayVpnIps []net.IP) {
+func (c *Control) InjectRelays(vpnIp netip.Addr, relayVpnIps []netip.Addr) {
 	c.f.lightHouse.Lock()
-	remoteList := c.f.lightHouse.unlockedGetRemoteList(iputil.Ip2VpnIp(vpnIp))
+	remoteList := c.f.lightHouse.unlockedGetRemoteList(iputil.NetIpToVpnIp(vpnIp))
 	remoteList.Lock()
 	defer remoteList.Unlock()
 	c.f.lightHouse.Unlock()
 
-	iVpnIp := iputil.Ip2VpnIp(vpnIp)
-	uVpnIp := []uint32{}
+	iVpnIp := iputil.NetIpToVpnIp(vpnIp)
+	var uVpnIp []uint32
 	for _, rVPnIp := range relayVpnIps {
-		uVpnIp = append(uVpnIp, uint32(iputil.Ip2VpnIp(rVPnIp)))
+		uVpnIp = append(uVpnIp, uint32(iputil.NetIpToVpnIp(rVPnIp)))
 	}
 
 	remoteList.unlockedSetRelay(iVpnIp, iVpnIp, uVpnIp)
@@ -105,13 +106,13 @@ func (c *Control) InjectUDPPacket(p *udp.Packet) {
 }
 
 // InjectTunUDPPacket puts a udp packet on the tun interface. Using UDP here because it's a simpler protocol
-func (c *Control) InjectTunUDPPacket(toIp net.IP, toPort uint16, fromPort uint16, data []byte) {
+func (c *Control) InjectTunUDPPacket(toIp netip.Addr, toPort uint16, fromPort uint16, data []byte) {
 	ip := layers.IPv4{
 		Version:  4,
 		TTL:      64,
 		Protocol: layers.IPProtocolUDP,
-		SrcIP:    c.f.inside.Cidr().IP,
-		DstIP:    toIp,
+		SrcIP:    c.f.inside.Cidr().Addr().AsSlice(),
+		DstIP:    toIp.AsSlice(),
 	}
 
 	udp := layers.UDP{

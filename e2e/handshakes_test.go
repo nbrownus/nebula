@@ -5,6 +5,7 @@ package e2e
 
 import (
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -100,7 +101,7 @@ func TestWrongResponderHandshake(t *testing.T) {
 			panic(err)
 		}
 
-		if p.ToIp.Equal(theirUdpAddr.IP) && p.ToPort == uint16(theirUdpAddr.Port) && h.Type == 1 {
+		if p.To == theirUdpAddr && h.Type == 1 {
 			return router.RouteAndExit
 		}
 
@@ -121,8 +122,8 @@ func TestWrongResponderHandshake(t *testing.T) {
 	r.FlushAll()
 
 	t.Log("Ensure ensure I don't have any hostinfo artifacts from evil")
-	assert.Nil(t, myControl.GetHostInfoByVpnIp(iputil.Ip2VpnIp(evilVpnIp), true), "My pending hostmap should not contain evil")
-	assert.Nil(t, myControl.GetHostInfoByVpnIp(iputil.Ip2VpnIp(evilVpnIp), false), "My main hostmap should not contain evil")
+	assert.Nil(t, myControl.GetHostInfoByVpnIp(iputil.NetIpToVpnIp(evilVpnIp), true), "My pending hostmap should not contain evil")
+	assert.Nil(t, myControl.GetHostInfoByVpnIp(iputil.NetIpToVpnIp(evilVpnIp), false), "My main hostmap should not contain evil")
 	//NOTE: if evil lost the handshake race it may still have a tunnel since me would reject the handshake since the tunnel is complete
 
 	//TODO: assert hostmaps for everyone
@@ -194,7 +195,7 @@ func TestRelays(t *testing.T) {
 
 	// Teach my how to get to the relay and that their can be reached via the relay
 	myControl.InjectLightHouseAddr(relayVpnIp, relayUdpAddr)
-	myControl.InjectRelays(theirVpnIp, []net.IP{relayVpnIp})
+	myControl.InjectRelays(theirVpnIp, []netip.Addr{relayVpnIp})
 	relayControl.InjectLightHouseAddr(theirVpnIp, theirUdpAddr)
 
 	// Build a router so we don't have to reason who gets which packet
@@ -212,6 +213,31 @@ func TestRelays(t *testing.T) {
 	p := r.RouteForAllUntilTxTun(theirControl)
 	assertUdpPacket(t, []byte("Hi from me"), p, myVpnIp, theirVpnIp, 80, 80)
 	//TODO: assert we actually used the relay even though it should be impossible for a tunnel to have occurred without it
+}
+
+func BenchmarkHotPath(b *testing.B) {
+	ca, _, caKey, _ := newTestCaCert(time.Now(), time.Now().Add(10*time.Minute), []*net.IPNet{}, []*net.IPNet{}, []string{})
+	myControl, myVpnIp, _ := newSimpleServer(ca, caKey, "me", net.IP{10, 0, 0, 1}, nil)
+	theirControl, theirVpnIp, theirUdpAddr := newSimpleServer(ca, caKey, "them", net.IP{10, 0, 0, 2}, nil)
+
+	// Put their info in our lighthouse
+	myControl.InjectLightHouseAddr(theirVpnIp, theirUdpAddr)
+
+	// Start the servers
+	myControl.Start()
+	theirControl.Start()
+
+	r := router.NewR(b, myControl, theirControl)
+
+	_ = r
+	_ = myVpnIp
+	for n := 0; n < b.N; n++ {
+		myControl.InjectTunUDPPacket(theirVpnIp, 80, 80, []byte("Hi from me"))
+		_ = r.RouteForAllUntilTxTun(theirControl)
+	}
+
+	myControl.Stop()
+	theirControl.Stop()
 }
 
 //TODO: add a test with many lies

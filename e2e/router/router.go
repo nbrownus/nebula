@@ -7,10 +7,10 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -35,7 +35,7 @@ type R struct {
 	// A last used map, if an inbound packet hit the inNat map then
 	// all return packets should use the same last used inbound address for the outbound sender
 	// map[from address + ":" + to address] => ip:port to rewrite in the udp packet to receiver
-	outNat map[string]net.UDPAddr
+	outNat map[string]netip.AddrPort
 
 	// A map of vpn ip to the nebula control it belongs to
 	vpnControls map[iputil.VpnIp]*nebula.Control
@@ -47,7 +47,7 @@ type R struct {
 
 	fn           string
 	cancelRender context.CancelFunc
-	t            *testing.T
+	t            testing.TB
 }
 
 type flowEntry struct {
@@ -79,7 +79,7 @@ type ExitFunc func(packet *udp.Packet, receiver *nebula.Control) ExitType
 // NewR creates a new router to pass packets in a controlled fashion between the provided controllers.
 // The packet flow will be recorded in a file within the mermaid directory under the same name as the test.
 // Renders will occur automatically, roughly every 100ms, until a call to RenderFlow() is made
-func NewR(t *testing.T, controls ...*nebula.Control) *R {
+func NewR(t testing.TB, controls ...*nebula.Control) *R {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	if err := os.MkdirAll("mermaid", 0755); err != nil {
@@ -90,7 +90,7 @@ func NewR(t *testing.T, controls ...*nebula.Control) *R {
 		controls:     make(map[string]*nebula.Control),
 		vpnControls:  make(map[iputil.VpnIp]*nebula.Control),
 		inNat:        make(map[string]*nebula.Control),
-		outNat:       make(map[string]net.UDPAddr),
+		outNat:       make(map[string]netip.AddrPort),
 		fn:           filepath.Join("mermaid", fmt.Sprintf("%s.md", t.Name())),
 		t:            t,
 		cancelRender: cancel,
@@ -277,7 +277,7 @@ func (r *R) RouteUntilTxTun(sender *nebula.Control, receiver *nebula.Control) []
 		case p := <-udpTx:
 			outAddr := sender.GetUDPAddr()
 			r.Lock()
-			inAddr := net.JoinHostPort(p.ToIp.String(), fmt.Sprintf("%v", p.ToPort))
+			inAddr := p.To.String()
 			c := r.getControl(outAddr, inAddr, p)
 			if c == nil {
 				r.Unlock()
@@ -336,7 +336,7 @@ func (r *R) RouteForAllUntilTxTun(receiver *nebula.Control) []byte {
 			p := rx.Interface().(*udp.Packet)
 			outAddr := cm[x].GetUDPAddr()
 
-			inAddr := net.JoinHostPort(p.ToIp.String(), fmt.Sprintf("%v", p.ToPort))
+			inAddr := p.To.String()
 			c := r.getControl(outAddr, inAddr, p)
 			if c == nil {
 				r.Unlock()
@@ -365,7 +365,7 @@ func (r *R) RouteExitFunc(sender *nebula.Control, whatDo ExitFunc) {
 		}
 
 		outAddr := sender.GetUDPAddr()
-		inAddr := net.JoinHostPort(p.ToIp.String(), fmt.Sprintf("%v", p.ToPort))
+		inAddr := p.To.String()
 		receiver := r.getControl(outAddr, inAddr, p)
 		if receiver == nil {
 			r.Unlock()
@@ -445,13 +445,13 @@ func (r *R) InjectUDPPacket(sender, receiver *nebula.Control, packet *udp.Packet
 // RouteForUntilAfterToAddr will route for sender and return only after it sees and sends a packet destined for toAddr
 // finish can be any of the exitType values except `keepRouting`, the default value is `routeAndExit`
 // If the router doesn't have the nebula controller for that address, we panic
-func (r *R) RouteForUntilAfterToAddr(sender *nebula.Control, toAddr *net.UDPAddr, finish ExitType) {
+func (r *R) RouteForUntilAfterToAddr(sender *nebula.Control, toAddr netip.AddrPort, finish ExitType) {
 	if finish == KeepRouting {
 		finish = RouteAndExit
 	}
 
 	r.RouteExitFunc(sender, func(p *udp.Packet, r *nebula.Control) ExitType {
-		if p.ToIp.Equal(toAddr.IP) && p.ToPort == uint16(toAddr.Port) {
+		if p.To == toAddr {
 			return finish
 		}
 
@@ -487,7 +487,7 @@ func (r *R) RouteForAllExitFunc(whatDo ExitFunc) {
 		p := rx.Interface().(*udp.Packet)
 
 		outAddr := cm[x].GetUDPAddr()
-		inAddr := net.JoinHostPort(p.ToIp.String(), fmt.Sprintf("%v", p.ToPort))
+		inAddr := p.To.String()
 		receiver := r.getControl(outAddr, inAddr, p)
 		if receiver == nil {
 			r.Unlock()
@@ -553,7 +553,7 @@ func (r *R) FlushAll() {
 		p := rx.Interface().(*udp.Packet)
 
 		outAddr := cm[x].GetUDPAddr()
-		inAddr := net.JoinHostPort(p.ToIp.String(), fmt.Sprintf("%v", p.ToPort))
+		inAddr := p.To.String()
 		receiver := r.getControl(outAddr, inAddr, p)
 		if receiver == nil {
 			r.Unlock()
@@ -567,26 +567,17 @@ func (r *R) FlushAll() {
 // This is an internal router function, the caller must hold the lock
 func (r *R) getControl(fromAddr, toAddr string, p *udp.Packet) *nebula.Control {
 	if newAddr, ok := r.outNat[fromAddr+":"+toAddr]; ok {
-		p.FromIp = newAddr.IP
-		p.FromPort = uint16(newAddr.Port)
+		p.From = newAddr
 	}
 
 	c, ok := r.inNat[toAddr]
 	if ok {
-		sHost, sPort, err := net.SplitHostPort(toAddr)
+		toAddr, err := netip.ParseAddrPort(toAddr)
 		if err != nil {
 			panic(err)
 		}
 
-		port, err := strconv.Atoi(sPort)
-		if err != nil {
-			panic(err)
-		}
-
-		r.outNat[c.GetUDPAddr()+":"+fromAddr] = net.UDPAddr{
-			IP:   net.ParseIP(sHost),
-			Port: port,
-		}
+		r.outNat[c.GetUDPAddr()+":"+fromAddr] = toAddr
 		return c
 	}
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
 	"runtime"
 	"strconv"
 
@@ -16,7 +17,7 @@ import (
 type Route struct {
 	MTU    int
 	Metric int
-	Cidr   *net.IPNet
+	Cidr   netip.Prefix
 	Via    *iputil.VpnIp
 }
 
@@ -34,7 +35,7 @@ func makeRouteTree(l *logrus.Logger, routes []Route, allowMTU bool) (*cidr.Tree4
 	return routeTree, nil
 }
 
-func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
+func parseRoutes(c *config.C, network netip.Prefix) ([]Route, error) {
 	var err error
 
 	r := c.Get("tun.routes")
@@ -84,12 +85,13 @@ func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 			MTU: mtu,
 		}
 
-		_, r.Cidr, err = net.ParseCIDR(fmt.Sprintf("%v", rRoute))
+		r.Cidr, err = netip.ParsePrefix(fmt.Sprintf("%v", rRoute))
 		if err != nil {
 			return nil, fmt.Errorf("entry %v.route in tun.routes failed to parse: %v", i+1, err)
 		}
 
-		if !ipWithin(network, r.Cidr) {
+		//TODO: contains isn't what we used to do, ensure that all of r.Cidr fits in network
+		if !network.Contains(r.Cidr.Addr()) {
 			return nil, fmt.Errorf(
 				"entry %v.route in tun.routes is not contained within the network attached to the certificate; route: %v, network: %v",
 				i+1,
@@ -104,7 +106,7 @@ func parseRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 	return routes, nil
 }
 
-func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
+func parseUnsafeRoutes(c *config.C, network netip.Prefix) ([]Route, error) {
 	var err error
 
 	r := c.Get("tun.unsafe_routes")
@@ -188,12 +190,13 @@ func parseUnsafeRoutes(c *config.C, network *net.IPNet) ([]Route, error) {
 			Metric: metric,
 		}
 
-		_, r.Cidr, err = net.ParseCIDR(fmt.Sprintf("%v", rRoute))
+		r.Cidr, err = netip.ParsePrefix(fmt.Sprintf("%v", rRoute))
 		if err != nil {
 			return nil, fmt.Errorf("entry %v.route in tun.unsafe_routes failed to parse: %v", i+1, err)
 		}
 
-		if ipWithin(network, r.Cidr) {
+		//TODO: contains isn't what we used to do, ensure that all of r.Cidr fits in network
+		if network.Contains(r.Cidr.Addr()) {
 			return nil, fmt.Errorf(
 				"entry %v.route in tun.unsafe_routes is contained within the network attached to the certificate; route: %v, network: %v",
 				i+1,

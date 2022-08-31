@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/flynn/noise"
@@ -21,7 +22,7 @@ const (
 	minFwPacketLen = 4
 )
 
-func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache) {
+func (f *Interface) readOutsidePackets(addr netip.AddrPort, via interface{}, out []byte, packet []byte, h *header.H, fwPacket *firewall.Packet, lhf udp.LightHouseHandlerFunc, nb []byte, q int, localCache firewall.ConntrackCache) {
 	err := h.Parse(packet)
 	if err != nil {
 		// TODO: best if we return this and let caller log
@@ -33,7 +34,10 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 		return
 	}
 
-	//l.Error("in packet ", header, packet[HeaderLen:])
+	if addr.IsValid() && f.lightHouse.myVpnNet.Contains(addr.Addr()) {
+		f.l.WithField("udpAddr", addr).Debugln("Ignoring packet from nebula network ip")
+		return
+	}
 
 	var hostinfo *HostInfo
 	// verify if we've seen this index before, otherwise respond to the handshake initiation
@@ -92,7 +96,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 			case TerminalType:
 				// If I am the target of this relay, process the unwrapped packet
 				// From this recursive point, all these variables are 'burned'. We shouldn't rely on them again.
-				f.readOutsidePackets(nil, &ViaSender{relayHI: hostinfo, remoteIdx: relay.RemoteIndex, relay: relay}, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
+				f.readOutsidePackets(netip.AddrPort{}, &ViaSender{relayHI: hostinfo, remoteIdx: relay.RemoteIndex, relay: relay}, out[:0], signedPayload, h, fwPacket, lhf, nb, q, localCache)
 				return
 			case ForwardingType:
 				// Find the target HostInfo relay object
@@ -245,13 +249,18 @@ func (f *Interface) sendCloseTunnel(h *HostInfo) {
 	f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 }
 
-func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udp.Addr) {
-	if addr != nil && !hostinfo.remote.Equals(addr) {
-		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnIp, addr.IP) {
+func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr netip.AddrPort) {
+	if addr.IsValid() && hostinfo.remote != addr {
+		if f.inside.RouteFor(iputil.NetIpToVpnIp(addr.Addr())) != 0 {
+			f.l.Error("Ignoring roaming to unsafe route", addr)
+			return
+		}
+
+		if !f.lightHouse.GetRemoteAllowList().Allow(hostinfo.vpnIp, addr.Addr()) {
 			hostinfo.logger(f.l).WithField("newAddr", addr).Debug("lighthouse.remote_allow_list denied roaming")
 			return
 		}
-		if !hostinfo.lastRoam.IsZero() && addr.Equals(hostinfo.lastRoamRemote) && time.Since(hostinfo.lastRoam) < RoamingSuppressSeconds*time.Second {
+		if !hostinfo.lastRoam.IsZero() && addr == hostinfo.lastRoamRemote && time.Since(hostinfo.lastRoam) < RoamingSuppressSeconds*time.Second {
 			if f.l.Level >= logrus.DebugLevel {
 				hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
 					Debugf("Suppressing roam back to previous remote for %d seconds", RoamingSuppressSeconds)
@@ -261,6 +270,7 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udp.Addr) {
 
 		hostinfo.logger(f.l).WithField("udpAddr", hostinfo.remote).WithField("newAddr", addr).
 			Info("Host roamed to new udp ip/port.")
+
 		hostinfo.lastRoam = time.Now()
 		hostinfo.lastRoamRemote = hostinfo.remote
 		hostinfo.SetRemote(addr)
@@ -268,11 +278,11 @@ func (f *Interface) handleHostRoaming(hostinfo *HostInfo, addr *udp.Addr) {
 
 }
 
-func (f *Interface) handleEncrypted(ci *ConnectionState, addr *udp.Addr, h *header.H) bool {
+func (f *Interface) handleEncrypted(ci *ConnectionState, addr netip.AddrPort, h *header.H) bool {
 	// If connectionstate exists and the replay protector allows, process packet
 	// Else, send recv errors for 300 seconds after a restart to allow fast reconnection.
 	if ci == nil || !ci.window.Check(f.l, h.MessageCounter) {
-		if addr != nil {
+		if addr.IsValid() {
 			f.maybeSendRecvError(addr, h.RemoteIndex)
 			return false
 		} else {
@@ -402,13 +412,13 @@ func (f *Interface) decryptToTun(hostinfo *HostInfo, messageCounter uint64, out 
 	}
 }
 
-func (f *Interface) maybeSendRecvError(endpoint *udp.Addr, index uint32) {
-	if f.sendRecvErrorConfig.ShouldSendRecvError(endpoint.IP) {
+func (f *Interface) maybeSendRecvError(endpoint netip.AddrPort, index uint32) {
+	if f.sendRecvErrorConfig.ShouldSendRecvError(endpoint.Addr()) {
 		f.sendRecvError(endpoint, index)
 	}
 }
 
-func (f *Interface) sendRecvError(endpoint *udp.Addr, index uint32) {
+func (f *Interface) sendRecvError(endpoint netip.AddrPort, index uint32) {
 	f.messageMetrics.Tx(header.RecvError, 0, 1)
 
 	//TODO: this should be a signed message so we can trust that we should drop the index
@@ -421,7 +431,7 @@ func (f *Interface) sendRecvError(endpoint *udp.Addr, index uint32) {
 	}
 }
 
-func (f *Interface) handleRecvError(addr *udp.Addr, h *header.H) {
+func (f *Interface) handleRecvError(addr netip.AddrPort, h *header.H) {
 	if f.l.Level >= logrus.DebugLevel {
 		f.l.WithField("index", h.RemoteIndex).
 			WithField("udpAddr", addr).
@@ -443,7 +453,7 @@ func (f *Interface) handleRecvError(addr *udp.Addr, h *header.H) {
 	if !hostinfo.RecvErrorExceeded() {
 		return
 	}
-	if hostinfo.remote != nil && !hostinfo.remote.Equals(addr) {
+	if hostinfo.remote.IsValid() && hostinfo.remote != addr {
 		f.l.Infoln("Someone spoofing recv_errors? ", addr, hostinfo.remote)
 		return
 	}

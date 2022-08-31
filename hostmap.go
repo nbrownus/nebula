@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,7 +19,7 @@ import (
 	"github.com/slackhq/nebula/udp"
 )
 
-//const ProbeLen = 100
+// const ProbeLen = 100
 const PromoteEvery = 1000
 const ReQueryEvery = 5000
 const MaxRemotes = 10
@@ -53,8 +54,8 @@ type HostMap struct {
 	Relays          map[uint32]*HostInfo // Maps a Relay IDX to a Relay HostInfo object
 	RemoteIndexes   map[uint32]*HostInfo
 	Hosts           map[iputil.VpnIp]*HostInfo
-	preferredRanges []*net.IPNet
-	vpnCIDR         *net.IPNet
+	preferredRanges []netip.Prefix
+	vpnCIDR         netip.Prefix
 	metricsEnabled  bool
 	l               *logrus.Logger
 }
@@ -151,7 +152,7 @@ func (rs *RelayState) InsertRelay(ip iputil.VpnIp, idx uint32, r *Relay) {
 type HostInfo struct {
 	sync.RWMutex
 
-	remote            *udp.Addr
+	remote            netip.AddrPort
 	remotes           *RemoteList
 	promoteCounter    uint32
 	ConnectionState   *ConnectionState
@@ -179,7 +180,7 @@ type HostInfo struct {
 	lastHandshakeTime uint64
 
 	lastRoam       time.Time
-	lastRoamRemote *udp.Addr
+	lastRoamRemote netip.AddrPort
 }
 
 type ViaSender struct {
@@ -202,7 +203,7 @@ type cachedPacketMetrics struct {
 	dropped metrics.Counter
 }
 
-func NewHostMap(l *logrus.Logger, name string, vpnCIDR *net.IPNet, preferredRanges []*net.IPNet) *HostMap {
+func NewHostMap(l *logrus.Logger, name string, vpnCIDR netip.Prefix, preferredRanges []netip.Prefix) *HostMap {
 	h := map[iputil.VpnIp]*HostInfo{}
 	i := map[uint32]*HostInfo{}
 	r := map[uint32]*HostInfo{}
@@ -590,7 +591,7 @@ func (hm *HostMap) Punchy(ctx context.Context, conn *udp.Conn) {
 
 // TryPromoteBest handles re-querying lighthouses and probing for better paths
 // NOTE: It is an error to call this if you are a lighthouse since they should not roam clients!
-func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface) {
+func (i *HostInfo) TryPromoteBest(preferredRanges []netip.Prefix, ifce *Interface) {
 	c := atomic.AddUint32(&i.promoteCounter, 1)
 	if c%PromoteEvery == 0 {
 		// The lock here is currently protecting i.remote access
@@ -599,17 +600,16 @@ func (i *HostInfo) TryPromoteBest(preferredRanges []*net.IPNet, ifce *Interface)
 		i.RUnlock()
 
 		// return early if we are already on a preferred remote
-		if remote != nil {
-			rIP := remote.IP
+		if remote.IsValid() {
 			for _, l := range preferredRanges {
-				if l.Contains(rIP) {
+				if l.Contains(remote.Addr()) {
 					return
 				}
 			}
 		}
 
-		i.remotes.ForEach(preferredRanges, func(addr *udp.Addr, preferred bool) {
-			if remote != nil && (addr == nil || !preferred) {
+		i.remotes.ForEach(preferredRanges, func(addr netip.AddrPort, preferred bool) {
+			if remote.IsValid() && (!addr.IsValid() || !preferred) {
 				return
 			}
 
@@ -687,23 +687,23 @@ func (i *HostInfo) GetCert() *cert.NebulaCertificate {
 	return nil
 }
 
-func (i *HostInfo) SetRemote(remote *udp.Addr) {
-	// We copy here because we likely got this remote from a source that reuses the object
-	if !i.remote.Equals(remote) {
-		i.remote = remote.Copy()
-		i.remotes.LearnRemote(i.vpnIp, remote.Copy())
+func (i *HostInfo) SetRemote(remote netip.AddrPort) {
+	if i.remote != remote {
+		i.remote = remote
+		i.remotes.LearnRemote(i.vpnIp, remote)
 	}
 }
 
 // SetRemoteIfPreferred returns true if the remote was changed. The lastRoam
 // time on the HostInfo will also be updated.
-func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udp.Addr) bool {
-	if newRemote == nil {
+func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote netip.AddrPort) bool {
+	if !newRemote.IsValid() {
 		// relays have nil udp Addrs
 		return false
 	}
+
 	currentRemote := i.remote
-	if currentRemote == nil {
+	if !currentRemote.IsValid() {
 		i.SetRemote(newRemote)
 		return true
 	}
@@ -713,19 +713,20 @@ func (i *HostInfo) SetRemoteIfPreferred(hm *HostMap, newRemote *udp.Addr) bool {
 	newIsPreferred := false
 	for _, l := range hm.preferredRanges {
 		// return early if we are already on a preferred remote
-		if l.Contains(currentRemote.IP) {
+		if l.Contains(currentRemote.Addr()) {
 			return false
 		}
 
-		if l.Contains(newRemote.IP) {
+		if l.Contains(newRemote.Addr()) {
 			newIsPreferred = true
+			break
 		}
 	}
 
 	if newIsPreferred {
 		// Consider this a roaming event
 		i.lastRoam = time.Now()
-		i.lastRoamRemote = currentRemote.Copy()
+		i.lastRoamRemote = currentRemote
 
 		i.SetRemote(newRemote)
 
@@ -750,12 +751,15 @@ func (i *HostInfo) CreateRemoteCIDR(c *cert.NebulaCertificate) {
 	}
 
 	remoteCidr := cidr.NewTree4()
-	for _, ip := range c.Details.Ips {
-		remoteCidr.AddCIDR(&net.IPNet{IP: ip.IP, Mask: net.IPMask{255, 255, 255, 255}}, struct{}{})
+	for _, rip := range c.Details.Ips {
+		ip, _ := netip.AddrFromSlice(rip.IP)
+		remoteCidr.AddCIDR(netip.PrefixFrom(ip, ip.BitLen()), struct{}{})
 	}
 
 	for _, n := range c.Details.Subnets {
-		remoteCidr.AddCIDR(n, struct{}{})
+		ip, _ := netip.AddrFromSlice(n.IP)
+		ones, _ := n.Mask.Size()
+		remoteCidr.AddCIDR(netip.PrefixFrom(ip, ones), struct{}{})
 	}
 	i.remoteCidr = remoteCidr
 }
@@ -777,9 +781,9 @@ func (i *HostInfo) logger(l *logrus.Logger) *logrus.Entry {
 
 // Utility functions
 
-func localIps(l *logrus.Logger, allowList *LocalAllowList) *[]net.IP {
+func localIps(l *logrus.Logger, allowList *LocalAllowList) []netip.Addr {
 	//FIXME: This function is pretty garbage
-	var ips []net.IP
+	var ips []netip.Addr
 	ifaces, _ := net.Interfaces()
 	for _, i := range ifaces {
 		allow := allowList.AllowName(i.Name)
@@ -790,15 +794,24 @@ func localIps(l *logrus.Logger, allowList *LocalAllowList) *[]net.IP {
 		if !allow {
 			continue
 		}
+
 		addrs, _ := i.Addrs()
 		for _, addr := range addrs {
-			var ip net.IP
+			var ip netip.Addr
+			var ok bool
+
 			switch v := addr.(type) {
 			case *net.IPNet:
-				//continue
-				ip = v.IP
+				ip, ok = netip.AddrFromSlice(v.IP)
+				if !ok {
+					continue
+				}
+
 			case *net.IPAddr:
-				ip = v.IP
+				ip, ok = netip.AddrFromSlice(v.IP)
+				if !ok {
+					continue
+				}
 			}
 
 			//TODO: Filtering out link local for now, this is probably the most correct thing
@@ -816,5 +829,5 @@ func localIps(l *logrus.Logger, allowList *LocalAllowList) *[]net.IP {
 			}
 		}
 	}
-	return &ips
+	return ips
 }

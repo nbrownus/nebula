@@ -1,7 +1,7 @@
 package overlay
 
 import (
-	"net"
+	"net/netip"
 
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/config"
@@ -10,7 +10,7 @@ import (
 
 const DefaultMTU = 1300
 
-func NewDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr *net.IPNet, fd *int, routines int) (Device, error) {
+func NewDeviceFromConfig(c *config.C, l *logrus.Logger, tunCidr netip.Prefix, fd *int, routines int) (Device, error) {
 	routes, err := parseRoutes(c, tunCidr)
 	if err != nil {
 		return nil, util.NewContextualError("Could not parse tun.routes", nil, err)

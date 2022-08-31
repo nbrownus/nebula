@@ -3,12 +3,13 @@ package udp
 import (
 	"github.com/slackhq/nebula/firewall"
 	"github.com/slackhq/nebula/header"
+	"net/netip"
 )
 
 const MTU = 9001
 
 type EncReader func(
-	addr *Addr,
+	addr netip.AddrPort,
 	via interface{},
 	out []byte,
 	packet []byte,

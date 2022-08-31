@@ -34,9 +34,13 @@ func (ip VpnIp) MarshalJSON() ([]byte, error) {
 	return []byte(fmt.Sprintf("\"%s\"", ip.String())), nil
 }
 
-func (ip VpnIp) ToIP() net.IP {
-	nip := make(net.IP, 4)
-	binary.BigEndian.PutUint32(nip, uint32(ip))
+func (ip VpnIp) ToIP() netip.Addr {
+	oip := make(net.IP, 4)
+	binary.BigEndian.PutUint32(oip, uint32(ip))
+	nip, ok := netip.AddrFromSlice(oip)
+	if !ok {
+		panic("could not convert VpnIp to netip.Addr")
+	}
 	return nip
 }
 
@@ -51,6 +55,10 @@ func Ip2VpnIp(ip []byte) VpnIp {
 		return VpnIp(binary.BigEndian.Uint32(ip[12:16]))
 	}
 	return VpnIp(binary.BigEndian.Uint32(ip))
+}
+
+func NetIpToVpnIp(ip netip.Addr) VpnIp {
+	return Ip2VpnIp(ip.AsSlice())
 }
 
 func ToNetIpAddr(ip net.IP) (netip.Addr, error) {

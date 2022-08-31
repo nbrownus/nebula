@@ -1,7 +1,7 @@
 package cidr
 
 import (
-	"net"
+	"net/netip"
 
 	"github.com/slackhq/nebula/iputil"
 )
@@ -27,13 +27,13 @@ func NewTree4() *Tree4 {
 	return tree
 }
 
-func (tree *Tree4) AddCIDR(cidr *net.IPNet, val interface{}) {
+func (tree *Tree4) AddCIDR(cidr netip.Prefix, val interface{}) {
 	bit := startbit
 	node := tree.root
 	next := tree.root
 
-	ip := iputil.Ip2VpnIp(cidr.IP)
-	mask := iputil.Ip2VpnIp(cidr.Mask)
+	ip := iputil.NetIpToVpnIp(cidr.Addr())
+	mask := iputil.VpnIp(cidr.Bits())
 
 	// Find our last ancestor in the tree
 	for bit&mask != 0 {
