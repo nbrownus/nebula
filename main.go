@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net"
+	"net/netip"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -77,7 +77,13 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	l.WithField("firewallHash", fw.GetRuleHash()).Info("Firewall started")
 
 	// TODO: make sure mask is 4 bytes
-	tunCidr := cs.certificate.Details.Ips[0]
+	ones, _ := cs.certificate.Details.Ips[0].Mask.Size()
+	ip, ok := netip.AddrFromSlice(cs.certificate.Details.Ips[0].IP)
+	if !ok {
+		//TODO!
+		l.Fatalf("Asdf")
+	}
+	tunCidr := netip.PrefixFrom(ip, ones)
 
 	ssh, err := sshd.NewSSHServer(l.WithField("subsystem", "sshd"))
 	wireSSHReload(l, ssh, c)
@@ -162,12 +168,12 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	}
 
 	// Set up my internal host map
-	var preferredRanges []*net.IPNet
+	var preferredRanges []netip.Prefix
 	rawPreferredRanges := c.GetStringSlice("preferred_ranges", []string{})
 	// First, check if 'preferred_ranges' is set and fallback to 'local_range'
 	if len(rawPreferredRanges) > 0 {
 		for _, rawPreferredRange := range rawPreferredRanges {
-			_, preferredRange, err := net.ParseCIDR(rawPreferredRange)
+			preferredRange, err := netip.ParsePrefix(rawPreferredRange)
 			if err != nil {
 				return nil, util.NewContextualError("Failed to parse preferred ranges", nil, err)
 			}
@@ -180,7 +186,7 @@ func Main(c *config.C, configTest bool, buildVersion string, logger *logrus.Logg
 	// deprecate local_range and remove in the future.
 	rawLocalRange := c.GetString("local_range", "")
 	if rawLocalRange != "" {
-		_, localRange, err := net.ParseCIDR(rawLocalRange)
+		localRange, err := netip.ParsePrefix(rawLocalRange)
 		if err != nil {
 			return nil, util.NewContextualError("Failed to parse local_range", nil, err)
 		}

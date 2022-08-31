@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
+	"net/netip"
 	"reflect"
 	"strconv"
 	"strings"
@@ -25,7 +25,7 @@ const tcpACK = 0x10
 const tcpFIN = 0x01
 
 type FirewallInterface interface {
-	AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, ip *net.IPNet, caName string, caSha string) error
+	AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, ip netip.Prefix, caName string, caSha string) error
 }
 
 type conn struct {
@@ -134,12 +134,17 @@ func NewFirewall(l *logrus.Logger, tcpTimeout, UDPTimeout, defaultTimeout time.D
 	}
 
 	localIps := cidr.NewTree4()
-	for _, ip := range c.Details.Ips {
-		localIps.AddCIDR(&net.IPNet{IP: ip.IP, Mask: net.IPMask{255, 255, 255, 255}}, struct{}{})
+	for _, rip := range c.Details.Ips {
+		//NOTE: if cert details used netips we could avoid this
+		ip, _ := netip.AddrFromSlice(rip.IP)
+		localIps.AddCIDR(netip.PrefixFrom(ip, ip.BitLen()), struct{}{})
 	}
 
 	for _, n := range c.Details.Subnets {
-		localIps.AddCIDR(n, struct{}{})
+		//NOTE: if cert details used netips we could avoid this
+		ip, _ := netip.AddrFromSlice(n.IP)
+		ones, _ := n.Mask.Size()
+		localIps.AddCIDR(netip.PrefixFrom(ip, ones), struct{}{})
 	}
 
 	return &Firewall{
@@ -193,11 +198,11 @@ func NewFirewallFromConfig(l *logrus.Logger, nc *cert.NebulaCertificate, c *conf
 }
 
 // AddRule properly creates the in memory rule structure for a firewall table.
-func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, ip *net.IPNet, caName string, caSha string) error {
+func (f *Firewall) AddRule(incoming bool, proto uint8, startPort int32, endPort int32, groups []string, host string, ip netip.Prefix, caName string, caSha string) error {
 	// Under gomobile, stringing a nil pointer with fmt causes an abort in debug mode for iOS
 	// https://github.com/golang/go/issues/14131
 	sIp := ""
-	if ip != nil {
+	if ip.IsValid() {
 		sIp = ip.String()
 	}
 
@@ -322,9 +327,9 @@ func AddFirewallRulesFromConfig(l *logrus.Logger, inbound bool, c *config.C, fw 
 			return fmt.Errorf("%s rule #%v; proto was not understood; `%s`", table, i, r.Proto)
 		}
 
-		var cidr *net.IPNet
+		var cidr netip.Prefix
 		if r.Cidr != "" {
-			_, cidr, err = net.ParseCIDR(r.Cidr)
+			cidr, err = netip.ParsePrefix(r.Cidr)
 			if err != nil {
 				return fmt.Errorf("%s rule #%v; cidr did not parse; %s", table, i, err)
 			}
@@ -568,7 +573,7 @@ func (ft *FirewallTable) match(p firewall.Packet, incoming bool, c *cert.NebulaC
 	return false
 }
 
-func (fp firewallPort) addRule(startPort int32, endPort int32, groups []string, host string, ip *net.IPNet, caName string, caSha string) error {
+func (fp firewallPort) addRule(startPort int32, endPort int32, groups []string, host string, ip netip.Prefix, caName string, caSha string) error {
 	if startPort > endPort {
 		return fmt.Errorf("start port was lower than end port")
 	}
@@ -612,7 +617,7 @@ func (fp firewallPort) match(p firewall.Packet, incoming bool, c *cert.NebulaCer
 	return fp[firewall.PortAny].match(p, c, caPool)
 }
 
-func (fc *FirewallCA) addRule(groups []string, host string, ip *net.IPNet, caName, caSha string) error {
+func (fc *FirewallCA) addRule(groups []string, host string, ip netip.Prefix, caName, caSha string) error {
 	fr := func() *FirewallRule {
 		return &FirewallRule{
 			Hosts:  make(map[string]struct{}),
@@ -675,7 +680,7 @@ func (fc *FirewallCA) match(p firewall.Packet, c *cert.NebulaCertificate, caPool
 	return fc.CANames[s.Details.Name].match(p, c)
 }
 
-func (fr *FirewallRule) addRule(groups []string, host string, ip *net.IPNet) error {
+func (fr *FirewallRule) addRule(groups []string, host string, ip netip.Prefix) error {
 	if fr.Any {
 		return nil
 	}
@@ -695,7 +700,7 @@ func (fr *FirewallRule) addRule(groups []string, host string, ip *net.IPNet) err
 			fr.Hosts[host] = struct{}{}
 		}
 
-		if ip != nil {
+		if ip.IsValid() {
 			fr.CIDR.AddCIDR(ip, struct{}{})
 		}
 	}
@@ -703,8 +708,8 @@ func (fr *FirewallRule) addRule(groups []string, host string, ip *net.IPNet) err
 	return nil
 }
 
-func (fr *FirewallRule) isAny(groups []string, host string, ip *net.IPNet) bool {
-	if len(groups) == 0 && host == "" && ip == nil {
+func (fr *FirewallRule) isAny(groups []string, host string, ip netip.Prefix) bool {
+	if len(groups) == 0 && host == "" && !ip.IsValid() {
 		return true
 	}
 
@@ -718,7 +723,7 @@ func (fr *FirewallRule) isAny(groups []string, host string, ip *net.IPNet) bool 
 		return true
 	}
 
-	if ip != nil && ip.Contains(net.IPv4(0, 0, 0, 0)) {
+	if ip.Addr().IsUnspecified() {
 		return true
 	}
 
@@ -879,7 +884,7 @@ func parsePort(s string) (startPort, endPort int32, err error) {
 	return
 }
 
-//TODO: write tests for these
+// TODO: write tests for these
 func setTCPRTTTracking(c *conn, p []byte) {
 	if c.Seq != 0 {
 		return

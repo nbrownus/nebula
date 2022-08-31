@@ -2,13 +2,13 @@ package nebula
 
 import (
 	"github.com/slackhq/nebula/header"
-	"github.com/slackhq/nebula/udp"
+	"net/netip"
 )
 
-func HandleIncomingHandshake(f *Interface, addr *udp.Addr, via interface{}, packet []byte, h *header.H, hostinfo *HostInfo) {
+func HandleIncomingHandshake(f *Interface, addr netip.AddrPort, via interface{}, packet []byte, h *header.H, hostinfo *HostInfo) {
 	// First remote allow list check before we know the vpnIp
-	if addr != nil {
-		if !f.lightHouse.GetRemoteAllowList().AllowUnknownVpnIp(addr.IP) {
+	if addr.IsValid() {
+		if !f.lightHouse.GetRemoteAllowList().AllowUnknownVpnIp(addr) {
 			f.l.WithField("udpAddr", addr).Debug("lighthouse.remote_allow_list denied incoming handshake")
 			return
 		}

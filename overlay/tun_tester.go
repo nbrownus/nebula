@@ -5,17 +5,18 @@ package overlay
 
 import (
 	"fmt"
-	"io"
-	"net"
-
 	"github.com/sirupsen/logrus"
 	"github.com/slackhq/nebula/cidr"
 	"github.com/slackhq/nebula/iputil"
+	"io"
+	"net/netip"
+	"os"
+	"runtime/debug"
 )
 
 type TestTun struct {
 	Device    string
-	cidr      *net.IPNet
+	cidr      netip.Prefix
 	Routes    []Route
 	routeTree *cidr.Tree4
 	l         *logrus.Logger
@@ -24,7 +25,7 @@ type TestTun struct {
 	TxPackets chan []byte // Packets transmitted outside by nebula
 }
 
-func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, _ int, routes []Route, _ int, _ bool) (*TestTun, error) {
+func newTun(l *logrus.Logger, deviceName string, cidr netip.Prefix, _ int, routes []Route, _ int, _ bool) (*TestTun, error) {
 	routeTree, err := makeRouteTree(l, routes, false)
 	if err != nil {
 		return nil, err
@@ -41,7 +42,7 @@ func newTun(l *logrus.Logger, deviceName string, cidr *net.IPNet, _ int, routes 
 	}, nil
 }
 
-func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int) (*TestTun, error) {
+func newTunFromFd(_ *logrus.Logger, _ int, _ netip.Prefix, _ int, _ []Route, _ int) (*TestTun, error) {
 	return nil, fmt.Errorf("newTunFromFd not supported")
 }
 
@@ -49,7 +50,12 @@ func newTunFromFd(_ *logrus.Logger, _ int, _ *net.IPNet, _ int, _ []Route, _ int
 // These are unencrypted ip layer frames destined for another nebula node.
 // packets should exit the udp side, capture them with udpConn.Get
 func (t *TestTun) Send(packet []byte) {
-	t.l.WithField("dataLen", len(packet)).Info("Tun receiving injected packet")
+	if t.l.Level >= logrus.InfoLevel {
+		t.l.WithField("dataLen", len(packet)).Info("Tun receiving injected packet")
+	}
+	if len(packet) == 0 {
+		debug.PrintStack()
+	}
 	t.rxPackets <- packet
 }
 
@@ -86,7 +92,7 @@ func (t *TestTun) Activate() error {
 	return nil
 }
 
-func (t *TestTun) Cidr() *net.IPNet {
+func (t *TestTun) Cidr() netip.Prefix {
 	return t.cidr
 }
 
@@ -107,7 +113,10 @@ func (t *TestTun) Close() error {
 }
 
 func (t *TestTun) Read(b []byte) (int, error) {
-	p := <-t.rxPackets
+	p, ok := <-t.rxPackets
+	if !ok {
+		return 0, os.ErrClosed
+	}
 	copy(b, p)
 	return len(p), nil
 }

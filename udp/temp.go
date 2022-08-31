@@ -3,6 +3,7 @@ package udp
 import (
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
+	"net/netip"
 )
 
 type EncWriter interface {
@@ -19,4 +20,4 @@ type EncWriter interface {
 
 //TODO: The items in this file belong in their own packages but doing that in a single PR is a nightmare
 
-type LightHouseHandlerFunc func(rAddr *Addr, vpnIp iputil.VpnIp, p []byte, w EncWriter)
+type LightHouseHandlerFunc func(rAddr netip.AddrPort, vpnIp iputil.VpnIp, p []byte, w EncWriter)

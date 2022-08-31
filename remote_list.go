@@ -1,8 +1,7 @@
 package nebula
 
 import (
-	"bytes"
-	"net"
+	"net/netip"
 	"sort"
 	"sync"
 
@@ -11,7 +10,7 @@ import (
 )
 
 // forEachFunc is used to benefit folks that want to do work inside the lock
-type forEachFunc func(addr *udp.Addr, preferred bool)
+type forEachFunc func(addr netip.AddrPort, preferred bool)
 
 // The checkFuncs here are to simplify bulk importing LH query response logic into a single function (reset slice and iterate)
 type checkFuncV4 func(vpnIp iputil.VpnIp, to *Ip4AndPort) bool
@@ -24,9 +23,9 @@ type CacheMap map[string]*Cache
 // Cache is the other part of CacheMap to better represent the lighthouse cache for humans
 // We don't reason about ipv4 vs ipv6 here
 type Cache struct {
-	Learned  []*udp.Addr `json:"learned,omitempty"`
-	Reported []*udp.Addr `json:"reported,omitempty"`
-	Relay    []*net.IP   `json:"relay"`
+	Learned  []*udp.Addr  `json:"learned,omitempty"`
+	Reported []*udp.Addr  `json:"reported,omitempty"`
+	Relay    []netip.Addr `json:"relay"`
 }
 
 //TODO: Seems like we should plop static host entries in here too since the are protected by the lighthouse from deletion
@@ -62,7 +61,7 @@ type RemoteList struct {
 	sync.RWMutex
 
 	// A deduplicated set of addresses. Any accessor should lock beforehand.
-	addrs []*udp.Addr
+	addrs []netip.AddrPort
 
 	// A set of relay addresses. VpnIp addresses that the remote identified as relays.
 	relays []*iputil.VpnIp
@@ -74,7 +73,7 @@ type RemoteList struct {
 
 	// This is a list of remotes that we have tried to handshake with and have returned from the wrong vpn ip.
 	// They should not be tried again during a handshake
-	badRemotes []*udp.Addr
+	badRemotes []netip.AddrPort
 
 	// A flag that the cache may have changed and addrs needs to be rebuilt
 	shouldRebuild bool
@@ -83,7 +82,7 @@ type RemoteList struct {
 // NewRemoteList creates a new empty RemoteList
 func NewRemoteList() *RemoteList {
 	return &RemoteList{
-		addrs:  make([]*udp.Addr, 0),
+		addrs:  make([]netip.AddrPort, 0),
 		relays: make([]*iputil.VpnIp, 0),
 		cache:  make(map[iputil.VpnIp]*cache),
 	}
@@ -91,7 +90,7 @@ func NewRemoteList() *RemoteList {
 
 // Len locks and reports the size of the deduplicated address list
 // The deduplication work may need to occur here, so you must pass preferredRanges
-func (r *RemoteList) Len(preferredRanges []*net.IPNet) int {
+func (r *RemoteList) Len(preferredRanges []netip.Prefix) int {
 	r.Rebuild(preferredRanges)
 	r.RLock()
 	defer r.RUnlock()
@@ -100,18 +99,18 @@ func (r *RemoteList) Len(preferredRanges []*net.IPNet) int {
 
 // ForEach locks and will call the forEachFunc for every deduplicated address in the list
 // The deduplication work may need to occur here, so you must pass preferredRanges
-func (r *RemoteList) ForEach(preferredRanges []*net.IPNet, forEach forEachFunc) {
+func (r *RemoteList) ForEach(preferredRanges []netip.Prefix, forEach forEachFunc) {
 	r.Rebuild(preferredRanges)
 	r.RLock()
 	for _, v := range r.addrs {
-		forEach(v, isPreferred(v.IP, preferredRanges))
+		forEach(v, isPreferred(v.Addr(), preferredRanges))
 	}
 	r.RUnlock()
 }
 
 // CopyAddrs locks and makes a deep copy of the deduplicated address list
 // The deduplication work may need to occur here, so you must pass preferredRanges
-func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udp.Addr {
+func (r *RemoteList) CopyAddrs(preferredRanges []netip.Prefix) []netip.AddrPort {
 	if r == nil {
 		return nil
 	}
@@ -120,9 +119,9 @@ func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udp.Addr {
 
 	r.RLock()
 	defer r.RUnlock()
-	c := make([]*udp.Addr, len(r.addrs))
+	c := make([]netip.AddrPort, len(r.addrs))
 	for i, v := range r.addrs {
-		c[i] = v.Copy()
+		c[i] = v
 	}
 	return c
 }
@@ -130,14 +129,14 @@ func (r *RemoteList) CopyAddrs(preferredRanges []*net.IPNet) []*udp.Addr {
 // LearnRemote locks and sets the learned slot for the owner vpn ip to the provided addr
 // Currently this is only needed when HostInfo.SetRemote is called as that should cover both handshaking and roaming.
 // It will mark the deduplicated address list as dirty, so do not call it unless new information is available
-//TODO: this needs to support the allow list list
-func (r *RemoteList) LearnRemote(ownerVpnIp iputil.VpnIp, addr *udp.Addr) {
+// TODO: this needs to support the allow list list
+func (r *RemoteList) LearnRemote(ownerVpnIp iputil.VpnIp, addr netip.AddrPort) {
 	r.Lock()
 	defer r.Unlock()
-	if v4 := addr.IP.To4(); v4 != nil {
-		r.unlockedSetLearnedV4(ownerVpnIp, NewIp4AndPort(v4, uint32(addr.Port)))
+	if addr.Addr().Is4() {
+		r.unlockedSetLearnedV4(ownerVpnIp, NewIp4AndPort(addr))
 	} else {
-		r.unlockedSetLearnedV6(ownerVpnIp, NewIp6AndPort(addr.IP, uint32(addr.Port)))
+		r.unlockedSetLearnedV6(ownerVpnIp, NewIp6AndPort(addr))
 	}
 }
 
@@ -154,7 +153,7 @@ func (r *RemoteList) CopyCache() *CacheMap {
 			c = &Cache{
 				Learned:  make([]*udp.Addr, 0),
 				Reported: make([]*udp.Addr, 0),
-				Relay:    make([]*net.IP, 0),
+				Relay:    make([]netip.Addr, 0),
 			}
 			cm[vpnIp] = c
 		}
@@ -186,8 +185,7 @@ func (r *RemoteList) CopyCache() *CacheMap {
 
 		if mc.relay != nil {
 			for _, a := range mc.relay.relay {
-				nip := iputil.VpnIp(a).ToIP()
-				c.Relay = append(c.Relay, &nip)
+				c.Relay = append(c.Relay, iputil.VpnIp(a).ToIP())
 			}
 		}
 	}
@@ -196,11 +194,12 @@ func (r *RemoteList) CopyCache() *CacheMap {
 }
 
 // BlockRemote locks and records the address as bad, it will be excluded from the deduplicated address list
-func (r *RemoteList) BlockRemote(bad *udp.Addr) {
-	if bad == nil {
+func (r *RemoteList) BlockRemote(bad netip.AddrPort) {
+	if !bad.IsValid() {
 		// relays can have nil udp Addrs
 		return
 	}
+
 	r.Lock()
 	defer r.Unlock()
 
@@ -209,21 +208,20 @@ func (r *RemoteList) BlockRemote(bad *udp.Addr) {
 		return
 	}
 
-	// We copy here because we are taking something else's memory and we can't trust everything
-	r.badRemotes = append(r.badRemotes, bad.Copy())
+	r.badRemotes = append(r.badRemotes, bad)
 
 	// Mark the next interaction must recollect/dedupe
 	r.shouldRebuild = true
 }
 
 // CopyBlockedRemotes locks and makes a deep copy of the blocked remotes list
-func (r *RemoteList) CopyBlockedRemotes() []*udp.Addr {
+func (r *RemoteList) CopyBlockedRemotes() []netip.AddrPort {
 	r.RLock()
 	defer r.RUnlock()
 
-	c := make([]*udp.Addr, len(r.badRemotes))
+	c := make([]netip.AddrPort, len(r.badRemotes))
 	for i, v := range r.badRemotes {
-		c[i] = v.Copy()
+		c[i] = v
 	}
 	return c
 }
@@ -237,7 +235,7 @@ func (r *RemoteList) ResetBlockedRemotes() {
 
 // Rebuild locks and generates the deduplicated address list only if there is work to be done
 // There is generally no reason to call this directly but it is safe to do so
-func (r *RemoteList) Rebuild(preferredRanges []*net.IPNet) {
+func (r *RemoteList) Rebuild(preferredRanges []netip.Prefix) {
 	r.Lock()
 	defer r.Unlock()
 
@@ -253,9 +251,9 @@ func (r *RemoteList) Rebuild(preferredRanges []*net.IPNet) {
 }
 
 // unlockedIsBad assumes you have the write lock and checks if the remote matches any entry in the blocked address list
-func (r *RemoteList) unlockedIsBad(remote *udp.Addr) bool {
+func (r *RemoteList) unlockedIsBad(remote netip.AddrPort) bool {
 	for _, v := range r.badRemotes {
-		if v.Equals(remote) {
+		if v == remote {
 			return true
 		}
 	}
@@ -399,14 +397,14 @@ func (r *RemoteList) unlockedCollect() {
 	for _, c := range r.cache {
 		if c.v4 != nil {
 			if c.v4.learned != nil {
-				u := NewUDPAddrFromLH4(c.v4.learned)
+				u := NewNetAddrPortFromLH4(c.v4.learned)
 				if !r.unlockedIsBad(u) {
 					addrs = append(addrs, u)
 				}
 			}
 
 			for _, v := range c.v4.reported {
-				u := NewUDPAddrFromLH4(v)
+				u := NewNetAddrPortFromLH4(v)
 				if !r.unlockedIsBad(u) {
 					addrs = append(addrs, u)
 				}
@@ -415,14 +413,14 @@ func (r *RemoteList) unlockedCollect() {
 
 		if c.v6 != nil {
 			if c.v6.learned != nil {
-				u := NewUDPAddrFromLH6(c.v6.learned)
+				u := NewNetAddrPortFromLH6(c.v6.learned)
 				if !r.unlockedIsBad(u) {
 					addrs = append(addrs, u)
 				}
 			}
 
 			for _, v := range c.v6.reported {
-				u := NewUDPAddrFromLH6(v)
+				u := NewNetAddrPortFromLH6(v)
 				if !r.unlockedIsBad(u) {
 					addrs = append(addrs, u)
 				}
@@ -443,7 +441,7 @@ func (r *RemoteList) unlockedCollect() {
 }
 
 // unlockedSort assumes you have the write lock and performs the deduping and sorting of the address list
-func (r *RemoteList) unlockedSort(preferredRanges []*net.IPNet) {
+func (r *RemoteList) unlockedSort(preferredRanges []netip.Prefix) {
 	n := len(r.addrs)
 	if n < 2 {
 		return
@@ -454,8 +452,8 @@ func (r *RemoteList) unlockedSort(preferredRanges []*net.IPNet) {
 		b := r.addrs[j]
 		// Preferred addresses first
 
-		aPref := isPreferred(a.IP, preferredRanges)
-		bPref := isPreferred(b.IP, preferredRanges)
+		aPref := isPreferred(a.Addr(), preferredRanges)
+		bPref := isPreferred(b.Addr(), preferredRanges)
 		switch {
 		case aPref && !bPref:
 			// If i is preferred and j is not, i is less than j
@@ -470,21 +468,21 @@ func (r *RemoteList) unlockedSort(preferredRanges []*net.IPNet) {
 		}
 
 		// ipv6 addresses 2nd
-		a4 := a.IP.To4()
-		b4 := b.IP.To4()
+		aIs4 := a.Addr().Is4()
+		bIs4 := b.Addr().Is4()
 		switch {
-		case a4 == nil && b4 != nil:
+		case !aIs4 && bIs4:
 			// If i is v6 and j is v4, i is less than j
 			return true
 
-		case a4 != nil && b4 == nil:
+		case aIs4 && !bIs4:
 			// If j is v6 and i is v4, i is not less than j
 			return false
 
-		case a4 != nil && b4 != nil:
-			// Special case for ipv4, a4 and b4 are not nil
-			aPrivate := isPrivateIP(a4)
-			bPrivate := isPrivateIP(b4)
+		case aIs4 && bIs4:
+			// Special case for both being ipv4
+			aPrivate := a.Addr().IsPrivate()
+			bPrivate := b.Addr().IsPrivate()
 			switch {
 			case !aPrivate && bPrivate:
 				// If i is a public ip (not private) and j is a private ip, i is less then j
@@ -503,10 +501,10 @@ func (r *RemoteList) unlockedSort(preferredRanges []*net.IPNet) {
 		}
 
 		// lexical order of ips 3rd
-		c := bytes.Compare(a.IP, b.IP)
+		c := a.Addr().Compare(b.Addr())
 		if c == 0 {
 			// Ips are the same, Lexical order of ports 4th
-			return a.Port < b.Port
+			return a.Port() < b.Port()
 		}
 
 		// Ip wasn't the same
@@ -519,7 +517,7 @@ func (r *RemoteList) unlockedSort(preferredRanges []*net.IPNet) {
 	// Deduplicate
 	a, b := 0, 1
 	for b < n {
-		if !r.addrs[a].Equals(r.addrs[b]) {
+		if r.addrs[a] != r.addrs[b] {
 			a++
 			if a != b {
 				r.addrs[a], r.addrs[b] = r.addrs[b], r.addrs[a]
@@ -541,7 +539,7 @@ func minInt(a, b int) int {
 }
 
 // isPreferred returns true of the ip is contained in the preferredRanges list
-func isPreferred(ip net.IP, preferredRanges []*net.IPNet) bool {
+func isPreferred(ip netip.Addr, preferredRanges []netip.Prefix) bool {
 	//TODO: this would be better in a CIDR6Tree
 	for _, p := range preferredRanges {
 		if p.Contains(ip) {
@@ -549,15 +547,4 @@ func isPreferred(ip net.IP, preferredRanges []*net.IPNet) bool {
 		}
 	}
 	return false
-}
-
-var _, private24BitBlock, _ = net.ParseCIDR("10.0.0.0/8")
-var _, private20BitBlock, _ = net.ParseCIDR("172.16.0.0/12")
-var _, private16BitBlock, _ = net.ParseCIDR("192.168.0.0/16")
-
-// isPrivateIP returns true if the ip is contained by a rfc 1918 private range
-func isPrivateIP(ip net.IP) bool {
-	//TODO: another great cidrtree option
-	//TODO: Private for ipv6 or just let it ride?
-	return private24BitBlock.Contains(ip) || private20BitBlock.Contains(ip) || private16BitBlock.Contains(ip)
 }

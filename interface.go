@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -96,7 +96,7 @@ const (
 	sendRecvErrorPrivate
 )
 
-func (s sendRecvErrorConfig) ShouldSendRecvError(ip net.IP) bool {
+func (s sendRecvErrorConfig) ShouldSendRecvError(ip netip.Addr) bool {
 	switch s {
 	case sendRecvErrorPrivate:
 		return ip.IsPrivate()

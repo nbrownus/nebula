@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"net/netip"
 	"os"
 	"reflect"
 	"runtime/pprof"
@@ -370,7 +371,7 @@ func sshListHostMap(hostMap *HostMap, a interface{}, w sshd.StringWriter) error 
 
 	hm := listHostMap(hostMap)
 	sort.Slice(hm, func(i, j int) bool {
-		return bytes.Compare(hm[i].VpnIp, hm[j].VpnIp) < 0
+		return hm[i].VpnIp.Less(hm[j].VpnIp)
 	})
 
 	if fs.Json || fs.Pretty {
@@ -575,16 +576,16 @@ func sshCreateTunnel(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 		return w.WriteLine(fmt.Sprintf("Tunnel already handshaking"))
 	}
 
-	var addr *udp.Addr
+	var addr netip.AddrPort
 	if flags.Address != "" {
 		addr = udp.NewAddrFromString(flags.Address)
-		if addr == nil {
+		if !addr.IsValid() {
 			return w.WriteLine("Address could not be parsed")
 		}
 	}
 
 	hostInfo = ifce.handshakeManager.AddVpnIp(vpnIp, ifce.initHostInfo)
-	if addr != nil {
+	if addr.IsValid() {
 		hostInfo.SetRemote(addr)
 	}
 	ifce.getOrHandshake(vpnIp)
@@ -608,7 +609,7 @@ func sshChangeRemote(ifce *Interface, fs interface{}, a []string, w sshd.StringW
 	}
 
 	addr := udp.NewAddrFromString(flags.Address)
-	if addr == nil {
+	if !addr.IsValid() {
 		return w.WriteLine("Address could not be parsed")
 	}
 

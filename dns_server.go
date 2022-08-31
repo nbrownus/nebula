@@ -3,6 +3,7 @@ package nebula
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"sync"
 
@@ -80,7 +81,7 @@ func parseQuery(l *logrus.Logger, m *dns.Msg, w dns.ResponseWriter) {
 			}
 		case dns.TypeTXT:
 			a, _, _ := net.SplitHostPort(w.RemoteAddr().String())
-			b := net.ParseIP(a)
+			b, _ := netip.ParseAddr(a)
 			// We don't answer these queries from non nebula nodes or localhost
 			//l.Debugf("Does %s contain %s", b, dnsR.hostMap.vpnCIDR)
 			if !dnsR.hostMap.vpnCIDR.Contains(b) && a != "127.0.0.1" {

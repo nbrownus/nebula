@@ -2,7 +2,7 @@ package nebula
 
 import (
 	"context"
-	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"sync/atomic"
@@ -12,7 +12,6 @@ import (
 	"github.com/slackhq/nebula/cert"
 	"github.com/slackhq/nebula/header"
 	"github.com/slackhq/nebula/iputil"
-	"github.com/slackhq/nebula/udp"
 )
 
 // Every interaction here needs to take extra care to copy memory and not return or use arguments "as is" when touching
@@ -28,14 +27,14 @@ type Control struct {
 }
 
 type ControlHostInfo struct {
-	VpnIp                  net.IP                  `json:"vpnIp"`
+	VpnIp                  netip.Addr              `json:"vpnIp"`
 	LocalIndex             uint32                  `json:"localIndex"`
 	RemoteIndex            uint32                  `json:"remoteIndex"`
-	RemoteAddrs            []*udp.Addr             `json:"remoteAddrs"`
+	RemoteAddrs            []netip.AddrPort        `json:"remoteAddrs"`
 	CachedPackets          int                     `json:"cachedPackets"`
 	Cert                   *cert.NebulaCertificate `json:"cert"`
 	MessageCounter         uint64                  `json:"messageCounter"`
-	CurrentRemote          *udp.Addr               `json:"currentRemote"`
+	CurrentRemote          netip.AddrPort          `json:"currentRemote"`
 	CurrentRelaysToMe      []iputil.VpnIp          `json:"currentRelaysToMe"`
 	CurrentRelaysThroughMe []iputil.VpnIp          `json:"currentRelaysThroughMe"`
 }
@@ -124,13 +123,13 @@ func (c *Control) GetHostInfoByVpnIp(vpnIp iputil.VpnIp, pending bool) *ControlH
 }
 
 // SetRemoteForTunnel forces a tunnel to use a specific remote
-func (c *Control) SetRemoteForTunnel(vpnIp iputil.VpnIp, addr udp.Addr) *ControlHostInfo {
+func (c *Control) SetRemoteForTunnel(vpnIp iputil.VpnIp, addr netip.AddrPort) *ControlHostInfo {
 	hostInfo, err := c.f.hostMap.QueryVpnIp(vpnIp)
 	if err != nil {
 		return nil
 	}
 
-	hostInfo.SetRemote(addr.Copy())
+	hostInfo.SetRemote(addr)
 	ch := copyHostInfo(hostInfo, c.f.hostMap.preferredRanges)
 	return &ch
 }
@@ -206,7 +205,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	return
 }
 
-func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
+func copyHostInfo(h *HostInfo, preferredRanges []netip.Prefix) ControlHostInfo {
 
 	chi := ControlHostInfo{
 		VpnIp:                  h.vpnIp.ToIP(),
@@ -226,8 +225,8 @@ func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 		chi.Cert = c.Copy()
 	}
 
-	if h.remote != nil {
-		chi.CurrentRemote = h.remote.Copy()
+	if h.remote.IsValid() {
+		chi.CurrentRemote = h.remote
 	}
 
 	return chi

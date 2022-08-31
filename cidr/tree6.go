@@ -1,7 +1,7 @@
 package cidr
 
 import (
-	"net"
+	"net/netip"
 
 	"github.com/slackhq/nebula/iputil"
 )
@@ -20,10 +20,10 @@ func NewTree6() *Tree6 {
 	return tree
 }
 
-func (tree *Tree6) AddCIDR(cidr *net.IPNet, val interface{}) {
+func (tree *Tree6) AddCIDR(cidr netip.Prefix, val interface{}) {
 	var node, next *Node
 
-	cidrIP, ipv4 := isIPV4(cidr.IP)
+	cidrIP, ipv4 := isIPV4(cidr.Addr())
 	if ipv4 {
 		node = tree.root4
 		next = tree.root4
@@ -35,7 +35,8 @@ func (tree *Tree6) AddCIDR(cidr *net.IPNet, val interface{}) {
 
 	for i := 0; i < len(cidrIP); i += 4 {
 		ip := iputil.Ip2VpnIp(cidrIP[i : i+4])
-		mask := iputil.Ip2VpnIp(cidr.Mask[i : i+4])
+		//mask := iputil.Ip2VpnIp(cidr.Mask[i : i+4])
+		mask := iputil.VpnIp(0) //TODO
 		bit := startbit
 
 		// Find our last ancestor in the tree
@@ -75,7 +76,7 @@ func (tree *Tree6) AddCIDR(cidr *net.IPNet, val interface{}) {
 }
 
 // Finds the most specific match
-func (tree *Tree6) MostSpecificContains(ip net.IP) (value interface{}) {
+func (tree *Tree6) MostSpecificContains(ip netip.Addr) (value interface{}) {
 	var node *Node
 
 	wholeIP, ipv4 := isIPV4(ip)
@@ -163,23 +164,10 @@ func (tree *Tree6) MostSpecificContainsIpV6(hi, lo uint64) (value interface{}) {
 	return value
 }
 
-func isIPV4(ip net.IP) (net.IP, bool) {
-	if len(ip) == net.IPv4len {
-		return ip, true
+func isIPV4(ip netip.Addr) ([16]byte, bool) {
+	if ip.Is4() {
+		return ip.As16(), true
 	}
 
-	if len(ip) == net.IPv6len && isZeros(ip[0:10]) && ip[10] == 0xff && ip[11] == 0xff {
-		return ip[12:16], true
-	}
-
-	return ip, false
-}
-
-func isZeros(p net.IP) bool {
-	for i := 0; i < len(p); i++ {
-		if p[i] != 0 {
-			return false
-		}
-	}
-	return true
+	return ip.As16(), false
 }

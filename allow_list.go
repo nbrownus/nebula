@@ -2,7 +2,7 @@ package nebula
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"regexp"
 
 	"github.com/slackhq/nebula/cidr"
@@ -122,7 +122,7 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 			return nil, fmt.Errorf("config `%s` has invalid value (type %T): %v", k, rawValue, rawValue)
 		}
 
-		_, ipNet, err := net.ParseCIDR(rawCIDR)
+		ipNet, err := netip.ParsePrefix(rawCIDR)
 		if err != nil {
 			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
 		}
@@ -130,7 +130,8 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 		// TODO: should we error on duplicate CIDRs in the config?
 		tree.AddCIDR(ipNet, value)
 
-		maskBits, maskSize := ipNet.Mask.Size()
+		maskBits := ipNet.Bits()
+		maskSize := ipNet.Addr().BitLen()
 
 		var rules *allowListRules
 		if maskSize == 32 {
@@ -156,7 +157,7 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 
 	if !rules4.defaultSet {
 		if rules4.allValuesMatch {
-			_, zeroCIDR, _ := net.ParseCIDR("0.0.0.0/0")
+			zeroCIDR, _ := netip.ParsePrefix("0.0.0.0/0")
 			tree.AddCIDR(zeroCIDR, !rules4.allValues)
 		} else {
 			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for 0.0.0.0/0", k)
@@ -165,7 +166,7 @@ func newAllowList(k string, raw interface{}, handleKey func(key string, value in
 
 	if !rules6.defaultSet {
 		if rules6.allValuesMatch {
-			_, zeroCIDR, _ := net.ParseCIDR("::/0")
+			zeroCIDR, _ := netip.ParsePrefix("::/0")
 			tree.AddCIDR(zeroCIDR, !rules6.allValues)
 		} else {
 			return nil, fmt.Errorf("config `%s` contains both true and false rules, but no default set for ::/0", k)
@@ -241,7 +242,7 @@ func getRemoteAllowRanges(c *config.C, k string) (*cidr.Tree6, error) {
 			return nil, err
 		}
 
-		_, ipNet, err := net.ParseCIDR(rawCIDR)
+		ipNet, err := netip.ParsePrefix(rawCIDR)
 		if err != nil {
 			return nil, fmt.Errorf("config `%s` has invalid CIDR: %s", k, rawCIDR)
 		}
@@ -252,7 +253,7 @@ func getRemoteAllowRanges(c *config.C, k string) (*cidr.Tree6, error) {
 	return remoteAllowRanges, nil
 }
 
-func (al *AllowList) Allow(ip net.IP) bool {
+func (al *AllowList) Allow(ip netip.Addr) bool {
 	if al == nil {
 		return true
 	}
@@ -294,7 +295,7 @@ func (al *AllowList) AllowIpV6(hi, lo uint64) bool {
 	}
 }
 
-func (al *LocalAllowList) Allow(ip net.IP) bool {
+func (al *LocalAllowList) Allow(ip netip.Addr) bool {
 	if al == nil {
 		return true
 	}
@@ -316,14 +317,14 @@ func (al *LocalAllowList) AllowName(name string) bool {
 	return !al.nameRules[0].Allow
 }
 
-func (al *RemoteAllowList) AllowUnknownVpnIp(ip net.IP) bool {
+func (al *RemoteAllowList) AllowUnknownVpnIp(ip netip.AddrPort) bool {
 	if al == nil {
 		return true
 	}
-	return al.AllowList.Allow(ip)
+	return al.AllowList.Allow(ip.Addr())
 }
 
-func (al *RemoteAllowList) Allow(vpnIp iputil.VpnIp, ip net.IP) bool {
+func (al *RemoteAllowList) Allow(vpnIp iputil.VpnIp, ip netip.Addr) bool {
 	if !al.getInsideAllowList(vpnIp).Allow(ip) {
 		return false
 	}
