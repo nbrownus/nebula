@@ -47,7 +47,7 @@ type HandshakeManager struct {
 	lightHouse             *LightHouse
 	outside                *udp.Conn
 	config                 HandshakeConfig
-	OutboundHandshakeTimer *LockingTimerWheel[iputil.VpnIp]
+	OutboundHandshakeTimer *LockingTimerWheel[iputil.VpnIp] //TODO: base this on the pending host map index
 	messageMetrics         *MessageMetrics
 	metricInitiated        metrics.Counter
 	metricTimedOut         metrics.Counter
@@ -160,7 +160,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 		c.lightHouse.QueryServer(vpnIp, f)
 	}
 
-	// Send a the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
+	// Send the handshake to all known ips, stage 2 takes care of assigning the hostinfo.remote based on the first to reply
 	var sentTo []*udp.Addr
 	hostinfo.remotes.ForEach(c.pendingHostMap.preferredRanges, func(addr *udp.Addr, _ bool) {
 		c.messageMetrics.Tx(header.Handshake, header.MessageSubType(hostinfo.HandshakePacket[0][1]), 1)
@@ -294,7 +294,7 @@ var (
 //
 // ErrLocalIndexCollision if we already have an entry in the main or pending
 // hostmap for the hostinfo.localIndexId.
-func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket uint8, overwrite bool, f *Interface) (*HostInfo, error) {
+func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket uint8, f *Interface) (*HostInfo, error) {
 	c.pendingHostMap.Lock()
 	defer c.pendingHostMap.Unlock()
 	c.mainHostMap.Lock()
@@ -303,10 +303,17 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 	// Check if we already have a tunnel with this vpn ip
 	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.vpnIp]
 	if found && existingHostInfo != nil {
-		// Is it just a delayed handshake packet?
-		if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], existingHostInfo.HandshakePacket[handshakePacket]) {
-			return existingHostInfo, ErrAlreadySeen
+		o := existingHostInfo
+		for existingHostInfo != nil {
+			// Is it just a delayed handshake packet?
+			if bytes.Equal(hostinfo.HandshakePacket[handshakePacket], existingHostInfo.HandshakePacket[handshakePacket]) {
+				return existingHostInfo, ErrAlreadySeen
+			}
+
+			existingHostInfo = existingHostInfo.next
 		}
+		//TODO: this is nasty
+		existingHostInfo = o
 
 		// Is this a newer handshake?
 		if existingHostInfo.lastHandshakeTime >= hostinfo.lastHandshakeTime {
@@ -337,33 +344,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 			Info("New host shadows existing host remoteIndex")
 	}
 
-	// Check if we are also handshaking with this vpn ip
-	pendingHostInfo, found := c.pendingHostMap.Hosts[hostinfo.vpnIp]
-	if found && pendingHostInfo != nil {
-		if !overwrite {
-			// We won, let our pending handshake win
-			return pendingHostInfo, ErrExistingHandshake
-		}
-
-		// We lost, take this handshake and move any cached packets over so they get sent
-		pendingHostInfo.ConnectionState.queueLock.Lock()
-		hostinfo.packetStore = append(hostinfo.packetStore, pendingHostInfo.packetStore...)
-		c.pendingHostMap.unlockedDeleteHostInfo(pendingHostInfo)
-		pendingHostInfo.ConnectionState.queueLock.Unlock()
-		pendingHostInfo.logger(c.l).Info("Handshake race lost, replacing pending handshake with completed tunnel")
-	}
-
-	if existingHostInfo != nil {
-		// We are going to overwrite this entry, so remove the old references
-		delete(c.mainHostMap.Hosts, existingHostInfo.vpnIp)
-		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
-		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
-		for _, relayIdx := range existingHostInfo.relayState.CopyRelayForIdxs() {
-			delete(c.mainHostMap.Relays, relayIdx)
-		}
-	}
-
-	c.mainHostMap.addHostInfo(hostinfo, f)
+	c.mainHostMap.unlockedAddHostInfo(hostinfo, f)
 	return existingHostInfo, nil
 }
 
@@ -376,17 +357,6 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 	c.mainHostMap.Lock()
 	defer c.mainHostMap.Unlock()
 
-	existingHostInfo, found := c.mainHostMap.Hosts[hostinfo.vpnIp]
-	if found && existingHostInfo != nil {
-		// We are going to overwrite this entry, so remove the old references
-		delete(c.mainHostMap.Hosts, existingHostInfo.vpnIp)
-		delete(c.mainHostMap.Indexes, existingHostInfo.localIndexId)
-		delete(c.mainHostMap.RemoteIndexes, existingHostInfo.remoteIndexId)
-		for _, relayIdx := range existingHostInfo.relayState.CopyRelayForIdxs() {
-			delete(c.mainHostMap.Relays, relayIdx)
-		}
-	}
-
 	existingRemoteIndex, found := c.mainHostMap.RemoteIndexes[hostinfo.remoteIndexId]
 	if found && existingRemoteIndex != nil {
 		// We have a collision, but this can happen since we can't control
@@ -396,7 +366,7 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 			Info("New host shadows existing host remoteIndex")
 	}
 
-	c.mainHostMap.addHostInfo(hostinfo, f)
+	c.mainHostMap.unlockedAddHostInfo(hostinfo, f)
 	c.pendingHostMap.unlockedDeleteHostInfo(hostinfo)
 }
 

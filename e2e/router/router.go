@@ -6,10 +6,12 @@ package router
 import (
 	"context"
 	"fmt"
+	"golang.org/x/exp/maps"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -150,6 +152,7 @@ func NewR(t testing.TB, controls ...*nebula.Control) *R {
 			case <-ctx.Done():
 				return
 			case <-clockSource.C:
+				r.renderHostmaps(-1)
 				r.renderFlow()
 			}
 		}
@@ -294,6 +297,28 @@ func (r *R) RenderHostmaps(title string, controls ...*nebula.Control) {
 	})
 }
 
+func (r *R) renderHostmaps(run int) {
+	c := maps.Values(r.controls)
+	sort.SliceStable(c, func(i, j int) bool {
+		return c[i].GetVpnIp() > c[j].GetVpnIp()
+	})
+
+	s := renderHostmaps(c...)
+	if len(r.additionalGraphs) > 0 {
+		lastGraph := r.additionalGraphs[len(r.additionalGraphs)-1]
+		if lastGraph.content == s {
+			// Ignore this rendering if it matches the last rendering added
+			// This is useful if you want to track rendering changes
+			return
+		}
+	}
+
+	r.additionalGraphs = append(r.additionalGraphs, mermaidGraph{
+		title:   fmt.Sprintf("Packet %v", run),
+		content: s,
+	})
+}
+
 // InjectFlow can be used to record packet flow if the test is handling the routing on its own.
 // The packet is assumed to have been received
 func (r *R) InjectFlow(from, to *nebula.Control, p *udp.Packet) {
@@ -331,6 +356,8 @@ func (r *R) unlockedInjectFlow(from, to *nebula.Control, p *udp.Packet, tun bool
 	if r.flow == nil {
 		return nil
 	}
+
+	r.renderHostmaps(len(r.flow))
 
 	if len(r.ignoreFlows) > 0 {
 		var h header.H

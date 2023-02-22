@@ -169,6 +169,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 				return
 			}
 		}
+		//TODO: make sure we are sending to the correct index in spite of maybe being the same vpnip
 		c.f.send(header.CloseTunnel, 0, h.ConnectionState, h, []byte{}, make([]byte, 12, 12), make([]byte, mtu))
 		c.f.closeTunnel(h)
 
@@ -178,11 +179,11 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	}
 
 	// Learn which hosts are being used as relays, so we can shut them down last.
-	relayingHosts := map[iputil.VpnIp]*HostInfo{}
+	relayingHosts := map[uint32]*HostInfo{}
 	// Grab the hostMap lock to access the Relays map
 	c.f.hostMap.Lock()
 	for _, relayingHost := range c.f.hostMap.Relays {
-		relayingHosts[relayingHost.vpnIp] = relayingHost
+		relayingHosts[relayingHost.localIndexId] = relayingHost
 	}
 	c.f.hostMap.Unlock()
 
@@ -190,7 +191,7 @@ func (c *Control) CloseAllTunnels(excludeLighthouses bool) (closed int) {
 	// Grab the hostMap lock to access the Hosts map
 	c.f.hostMap.Lock()
 	for _, relayHost := range c.f.hostMap.Hosts {
-		if _, ok := relayingHosts[relayHost.vpnIp]; !ok {
+		if _, ok := relayingHosts[relayHost.localIndexId]; !ok {
 			hostInfos = append(hostInfos, relayHost)
 		}
 	}

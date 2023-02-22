@@ -40,6 +40,7 @@ require (
 	github.com/prometheus/common v0.37.0 // indirect
 	github.com/prometheus/procfs v0.8.0 // indirect
 	github.com/vishvananda/netns v0.0.1 // indirect
+	golang.org/x/exp v0.0.0-20230213192124-5e25df0256eb // indirect
 	golang.org/x/mod v0.7.0 // indirect
 	golang.org/x/term v0.2.0 // indirect
 	golang.org/x/tools v0.3.0 // indirect

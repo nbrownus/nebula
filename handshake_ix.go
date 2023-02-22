@@ -207,9 +207,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 	hostinfo.SetRemote(addr)
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
-	// Only overwrite existing record if we should win the handshake race
-	overwrite := vpnIp > f.myVpnIp
-	existing, err := f.handshakeManager.CheckAndComplete(hostinfo, 0, overwrite, f)
+	existing, err := f.handshakeManager.CheckAndComplete(hostinfo, 0, f)
 	if err != nil {
 		switch err {
 		case ErrAlreadySeen:
@@ -344,6 +342,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 			Info("Handshake message sent")
 	}
 
+	f.connectionManager.Out(hostinfo.localIndexId)
 	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)
 
 	return
@@ -501,7 +500,6 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via interface{}, hostinfo *
 	hostinfo.CreateRemoteCIDR(remoteCert)
 
 	// Complete our handshake and update metrics, this will replace any existing tunnels for this vpnIp
-	//TODO: Complete here does not do a race avoidance, it will just take the new tunnel. Is this ok?
 	f.handshakeManager.Complete(hostinfo, f)
 	hostinfo.handshakeComplete(f.l, f.cachedPacketMetrics)
 	f.metricHandshakes.Update(duration)
