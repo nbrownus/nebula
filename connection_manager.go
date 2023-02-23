@@ -209,6 +209,7 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 				//	in practice I think this only matters on (re)handshake races specifically leading to some memory bloat
 				//	communication will be unimpeded and we enable unclean shutdown recovery by not blocking the situation
 				//  in general. Tunnels that are not actively sending to us will be torn down so things will recover given a long enough time span
+				//MAYBE: if packets are coming in on the non primary, promote it to primary if its the race winner
 			}
 			continue
 		}

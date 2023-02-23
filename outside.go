@@ -108,12 +108,32 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				// Find the target HostInfo relay object
 				targetHI, err := f.hostMap.QueryVpnIp(relay.PeerIp)
 				if err != nil {
+					fmt.Printf("hi %v", targetHI)
+					fmt.Printf("hi %v", relay)
+					fmt.Println("***************************************************************")
 					hostinfo.logger(f.l).WithField("peerIp", relay.PeerIp).WithError(err).Info("Failed to find target host info by ip")
 					return
 				}
 				// find the target Relay info object
-				targetRelay, ok := targetHI.relayState.QueryRelayForByIp(hostinfo.vpnIp)
-				if !ok {
+				var targetRelay *Relay
+				var ok bool
+				for targetHI != nil {
+					targetRelay, ok = targetHI.relayState.QueryRelayForByIp(hostinfo.vpnIp)
+					if ok {
+						break
+					}
+					targetHI = targetHI.next
+				}
+
+				if targetRelay == nil {
+					fmt.Println("***************************************************************")
+					fmt.Println("***************************************************************")
+					fmt.Println("***************************************************************")
+					fmt.Println("***************************************************************")
+					//t, _ := f.hostMap.QueryIndex(relay.RemoteIndex)
+					fmt.Printf("%+v\n", relay)
+					fmt.Println("***************************************************************")
+
 					hostinfo.logger(f.l).WithField("peerIp", relay.PeerIp).Info("Failed to find relay in hostinfo")
 					return
 				}

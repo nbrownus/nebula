@@ -83,9 +83,23 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 
 // EstablishRelay updates a Requested Relay to become an Established Relay, which can pass traffic.
 func (rm *relayManager) EstablishRelay(relayHostInfo *HostInfo, m *NebulaControl) (*Relay, error) {
-	relay, ok := relayHostInfo.relayState.QueryRelayForByIdx(m.InitiatorRelayIndex)
-	if !ok {
-		rm.l.WithFields(logrus.Fields{"relayHostInfo": relayHostInfo.vpnIp,
+	var relay *Relay
+	var ok bool
+
+	// This is a bit odd because we want to start at the primary hostinfo for the relay vpn ip and move down until we find the right one
+	origRelayHostInfo := relayHostInfo
+	relayHostInfo, _ = rm.hostmap.QueryVpnIp(relayHostInfo.vpnIp)
+	for relayHostInfo != nil {
+		relay, ok = relayHostInfo.relayState.QueryRelayForByIdx(m.InitiatorRelayIndex)
+		if ok {
+			break
+		}
+
+		relayHostInfo = relayHostInfo.next
+	}
+
+	if relayHostInfo == nil {
+		rm.l.WithFields(logrus.Fields{"relayHostInfo": origRelayHostInfo.vpnIp,
 			"initiatorRelayIndex": m.InitiatorRelayIndex,
 			"relayFrom":           m.RelayFromIp,
 			"relayTo":             m.RelayToIp}).Info("relayManager EstablishRelay relayForByIdx not found")
@@ -134,9 +148,19 @@ func (rm *relayManager) handleCreateRelayResponse(h *HostInfo, f *Interface, m *
 		rm.l.WithError(err).WithField("relayPeerIp", relay.PeerIp).Error("Can't find a HostInfo for peer IP")
 		return
 	}
-	peerRelay, ok := peerHostInfo.relayState.QueryRelayForByIp(target)
-	if !ok {
-		rm.l.WithField("peerIp", peerHostInfo.vpnIp).WithField("target", target.String()).Error("peerRelay does not have Relay state for target IP", peerHostInfo.vpnIp.String(), target.String())
+
+	var peerRelay *Relay
+	var ok bool
+	for peerHostInfo != nil {
+		peerRelay, ok = peerHostInfo.relayState.QueryRelayForByIp(target)
+		if ok {
+			break
+		}
+		peerHostInfo = peerHostInfo.next
+	}
+	if peerRelay == nil {
+		rm.l.WithField("peerIp", peerHostInfo.vpnIp).WithField("target", target.String()).
+			Error("peerRelay does not have Relay state for target IP", peerHostInfo.vpnIp.String(), target.String())
 		return
 	}
 	peerRelay.State = Established
@@ -165,6 +189,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		Info("handleCreateRelayRequest")
 	from := iputil.VpnIp(m.RelayFromIp)
 	target := iputil.VpnIp(m.RelayToIp)
+
 	// Is the target of the relay me?
 	if target == f.myVpnIp {
 		existingRelay, ok := h.relayState.QueryRelayForByIp(from)
