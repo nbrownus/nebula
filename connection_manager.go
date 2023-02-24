@@ -201,15 +201,17 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 			n.ClearPendingDeletion(localIndex)
 
 			if !mainHostInfo {
-				// This hostinfo is still being used despite not being the primary hostinfo for this vpn ip
-				// Keep tracking so that we can tear it down when it goes away
-				n.Out(hostinfo.localIndexId)
-
-				//TODO: It would be ideal if we could choose the same winner for both sides here and collapse back to a single tunnel
-				//	in practice I think this only matters on (re)handshake races specifically leading to some memory bloat
-				//	communication will be unimpeded and we enable unclean shutdown recovery by not blocking the situation
-				//  in general. Tunnels that are not actively sending to us will be torn down so things will recover given a long enough time span
-				//MAYBE: if packets are coming in on the non primary, promote it to primary if its the race winner
+				if hostinfo.vpnIp > n.intf.myVpnIp {
+					// We are receiving traffic on the non primary hostinfo and we really just want 1 tunnel. Make
+					// This the primary and prime the old primary hostinfo for testing
+					//TODO: What happens if we have
+					n.hostMap.MakePrimary(hostinfo)
+					n.Out(hi2.localIndexId)
+				} else {
+					// This hostinfo is still being used despite not being the primary hostinfo for this vpn ip
+					// Keep tracking so that we can tear it down when it goes away
+					n.Out(hostinfo.localIndexId)
+				}
 			}
 			continue
 		}

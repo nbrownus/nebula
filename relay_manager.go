@@ -61,6 +61,9 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iput
 
 		_, inRelays := hm.Relays[index]
 		if !inRelays {
+			//TODO: explain why, trying to coalesce tunnels
+			hm.unlockedMakePrimary(relayHostInfo)
+
 			hm.Relays[index] = relayHostInfo
 			newRelay := Relay{
 				Type:       relayType,

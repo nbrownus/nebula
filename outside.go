@@ -106,6 +106,7 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				return
 			case ForwardingType:
 				// Find the target HostInfo relay object
+				//TODO: we should just use the relay.RelayIndex or something instead
 				targetHI, err := f.hostMap.QueryVpnIp(relay.PeerIp)
 				if err != nil {
 					fmt.Printf("hi %v", targetHI)
@@ -116,14 +117,14 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 				}
 				// find the target Relay info object
 				var targetRelay *Relay
-				var ok bool
-				for targetHI != nil {
-					targetRelay, ok = targetHI.relayState.QueryRelayForByIp(hostinfo.vpnIp)
-					if ok {
-						break
-					}
-					targetHI = targetHI.next
-				}
+				//var ok bool
+				//for targetHI != nil {
+				targetRelay, ok = targetHI.relayState.QueryRelayForByIp(hostinfo.vpnIp)
+				//	if ok {
+				//		break
+				//	}
+				//	targetHI = targetHI.next
+				//}
 
 				if targetRelay == nil {
 					fmt.Println("***************************************************************")

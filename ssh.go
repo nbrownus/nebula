@@ -766,7 +766,7 @@ func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		PeerIp         iputil.VpnIp
 		LocalIndex     uint32
 		RemoteIndex    uint32
-		RelayedThrough []iputil.VpnIp
+		RelayedThrough []uint32
 	}
 
 	type RelayOutput struct {
@@ -829,7 +829,7 @@ func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 			}
 			relayedHI, err := ifce.hostMap.QueryVpnIp(vpnIp)
 			if err == nil {
-				rf.RelayedThrough = append(rf.RelayedThrough, relayedHI.relayState.CopyRelayIps()...)
+				rf.RelayedThrough = append(rf.RelayedThrough, relayedHI.relayState.CopyRelayToLocalIndexes()...)
 			}
 
 			ro.RelayForIps = append(ro.RelayForIps, rf)

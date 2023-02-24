@@ -4,6 +4,7 @@
 package e2e
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -206,8 +207,8 @@ func TestStage1Race(t *testing.T) {
 
 	for len(myControl.GetHostmap().Indexes)+len(theirControl.GetHostmap().Indexes) > 2 {
 		assertTunnel(t, myVpnIpNet.IP, theirVpnIpNet.IP, myControl, theirControl, r)
-		r.RouteForAllUntilTxTun(theirControl)
-
+		//r.RouteForAllUntilTxTun(theirControl)
+		t.Log("still")
 		time.Sleep(time.Second)
 	}
 
@@ -271,13 +272,6 @@ func TestUncleanShutdownRaceLoser(t *testing.T) {
 	p = r.RouteForAllUntilTxTun(theirControl)
 	assertUdpPacket(t, []byte("Hi from me again"), p, myVpnIpNet.IP, theirVpnIpNet.IP, 80, 80)
 
-	go func() {
-		for {
-			r.RenderHostmaps("derp", myControl, theirControl)
-			time.Sleep(time.Second)
-		}
-	}()
-
 	assertTunnel(t, myVpnIpNet.IP, theirVpnIpNet.IP, myControl, theirControl, r)
 
 	start := len(theirControl.GetHostmap().Indexes)
@@ -287,7 +281,7 @@ func TestUncleanShutdownRaceLoser(t *testing.T) {
 		}
 	}
 
-	r.RenderHostmaps("nasdfasdfasdfaduked hostmaps", myControl, theirControl)
+	r.RenderHostmaps("Final hostmaps", myControl, theirControl)
 }
 
 func aTestUncleanShutdownARaceLoserPoop(t *testing.T) {
@@ -420,6 +414,25 @@ func TestRelays(t *testing.T) {
 	assertUdpPacket(t, []byte("Hi from me"), p, myVpnIpNet.IP, theirVpnIpNet.IP, 80, 80)
 	r.RenderHostmaps("Final hostmaps", myControl, relayControl, theirControl)
 	//TODO: assert we actually used the relay even though it should be impossible for a tunnel to have occurred without it
+
+	pr := func(hm *nebula.HostMap) {
+		fmt.Println("********************************")
+		for idx, hi := range hm.Indexes {
+			fmt.Printf("index %v:ip :%v local %v; remote %v\n", idx, hi.GetVpnIp(), hi.GetLocalIndex(), hi.GetRemoteIndex())
+			fmt.Printf("    %+v\n", hi.GetRelayState())
+		}
+
+		for idx, hi := range hm.Relays {
+			fmt.Printf("relay %v:ip %v: local %v; remote %v\n", idx, hi.GetVpnIp(), hi.GetLocalIndex(), hi.GetRemoteIndex())
+		}
+		fmt.Println("********************************")
+	}
+	pr(myControl.GetHostmap())
+	pr(relayControl.GetHostmap())
+
+	myControl.Stop()
+	relayControl.Stop()
+	theirControl.Stop()
 }
 
 func TestStage1RaceRelays(t *testing.T) {
@@ -579,7 +592,7 @@ func TestStage1RaceRelays2(t *testing.T) {
 	r.Log("Trigger a handshake to start from me to them via the relay")
 	myControl.InjectTunUDPPacket(theirVpnIpNet.IP, 80, 80, []byte("Hi from me"))
 
-	//r.RouteForAllUntilTxTun(theirControl)
+	r.RouteForAllUntilTxTun(theirControl)
 	r.Log("*******************************************************************************")
 	assertTunnel(t, myVpnIpNet.IP, theirVpnIpNet.IP, myControl, theirControl, r)
 

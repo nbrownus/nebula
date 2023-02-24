@@ -137,7 +137,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 		HandshakePacket:   make(map[uint8][]byte, 0),
 		lastHandshakeTime: hs.Details.Time,
 		relayState: RelayState{
-			relays:        map[iputil.VpnIp]struct{}{},
+			relays:        map[uint32]struct{}{},
 			relayForByIp:  map[iputil.VpnIp]*Relay{},
 			relayForByIdx: map[uint32]*Relay{},
 		},
@@ -245,7 +245,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 					f.l.Error("Handshake send failed: both addr and via are nil.")
 					return
 				}
-				hostinfo.relayState.InsertRelayTo(via2.relayHI.vpnIp)
+				hostinfo.relayState.InsertRelayToIndex(via2.relayHI.localIndexId)
 				f.SendVia(via2.relayHI, via2.relay, msg, make([]byte, 12), make([]byte, mtu), false)
 				f.l.WithField("vpnIp", existing.vpnIp).WithField("relay", via2.relayHI.vpnIp).
 					WithField("handshake", m{"stage": 2, "style": "ix_psk0"}).WithField("cached", true).
@@ -330,7 +330,7 @@ func ixHandshakeStage1(f *Interface, addr *udp.Addr, via interface{}, packet []b
 			f.l.Error("Handshake send failed: both addr and via are nil.")
 			return
 		}
-		hostinfo.relayState.InsertRelayTo(via2.relayHI.vpnIp)
+		hostinfo.relayState.InsertRelayToIndex(via2.relayHI.localIndexId)
 		f.SendVia(via2.relayHI, via2.relay, msg, make([]byte, 12), make([]byte, mtu), false)
 		f.l.WithField("vpnIp", vpnIp).WithField("relay", via2.relayHI.vpnIp).
 			WithField("certName", certName).
@@ -493,7 +493,7 @@ func ixHandshakeStage2(f *Interface, addr *udp.Addr, via interface{}, hostinfo *
 		hostinfo.SetRemote(addr)
 	} else {
 		via2 := via.(*ViaSender)
-		hostinfo.relayState.InsertRelayTo(via2.relayHI.vpnIp)
+		hostinfo.relayState.InsertRelayToIndex(via2.relayHI.localIndexId)
 	}
 
 	// Build up the radix for the firewall if we have subnets in the cert

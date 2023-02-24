@@ -72,8 +72,8 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 		lines = append(lines, fmt.Sprintf("%v.%v --> %v.%v", clusterName, vpnIp, clusterName, hi.GetLocalIndex()))
 
 		rs := hi.GetRelayState()
-		for _, relayIp := range rs.CopyRelayIps() {
-			lines = append(lines, fmt.Sprintf("%v.%v --> %v.%v", clusterName, vpnIp, clusterName, relayIp))
+		for _, relayIdx := range rs.CopyRelayToLocalIndexes() {
+			lines = append(lines, fmt.Sprintf("%v.%v --> %v.%v", clusterName, vpnIp, clusterName, relayIdx))
 		}
 
 		for _, relayIp := range rs.CopyRelayForIdxs() {
