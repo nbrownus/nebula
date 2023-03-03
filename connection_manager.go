@@ -211,6 +211,9 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 					// Keep tracking so that we can tear it down when it goes away
 					n.Out(hostinfo.localIndexId)
 				}
+
+			} else {
+				n.handleRehandshake(hostinfo)
 			}
 
 			continue
@@ -260,8 +263,15 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 				WithField("tunnelCheck", m{"state": "alive", "method": "active"}).
 				Debug("Tunnel status")
 
-			n.ClearLocalIndex(localIndex)
-			n.ClearPendingDeletion(localIndex)
+			primary, _ := n.hostMap.QueryVpnIp(hostinfo.vpnIp)
+			if primary != nil && primary != hostinfo {
+				// Keep tracking non primary host infos
+				n.Out(localIndex)
+			} else {
+				n.ClearLocalIndex(localIndex)
+				n.ClearPendingDeletion(localIndex)
+			}
+
 			continue
 		}
 
@@ -282,6 +292,38 @@ func (n *connectionManager) HandleDeletionTick(now time.Time) {
 
 		n.ClearLocalIndex(localIndex)
 		n.ClearPendingDeletion(localIndex)
+	}
+}
+
+func (n *connectionManager) handleRehandshake(hostinfo *HostInfo) {
+	certState := n.intf.certState.Load()
+	if hostinfo.ConnectionState.certState == certState {
+		return
+	}
+
+	for _, relayIdx := range hostinfo.relayState.CopyRelayToIndexes() {
+		relayHi, _ := n.hostMap.QueryIndex(relayIdx)
+		if relayHi != nil && relayHi.ConnectionState.certState != certState {
+			// Can't upgrade the relayed tunnel until we upgrade the relays
+			return
+		}
+	}
+
+	n.l.WithField("vpnIp", hostinfo.vpnIp).
+		WithField("reason", "my certificate changed").
+		Info("Re-handshaking with remote")
+
+	//TODO: this is copied from getOrHandshake to keep the extra checks out of the hot path, figure it out
+	hostinfo = n.intf.handshakeManager.AddVpnIp(hostinfo.vpnIp, n.intf.initHostInfo)
+	ixHandshakeStage0(n.intf, hostinfo.vpnIp, hostinfo)
+
+	// If this is a static host, we don't need to wait for the HostQueryReply
+	// We can trigger the handshake right now
+	if _, ok := n.intf.lightHouse.GetStaticHostList()[hostinfo.vpnIp]; ok {
+		select {
+		case n.intf.handshakeManager.trigger <- hostinfo.vpnIp:
+		default:
+		}
 	}
 }
 

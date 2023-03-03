@@ -700,7 +700,7 @@ func sshPrintCert(ifce *Interface, fs interface{}, a []string, w sshd.StringWrit
 		return nil
 	}
 
-	cert := ifce.certState.certificate
+	cert := ifce.certState.Load().certificate
 	if len(a) > 0 {
 		parsedIp := net.ParseIP(a[0])
 		if parsedIp == nil {
@@ -775,7 +775,7 @@ func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 		PeerIp         iputil.VpnIp
 		LocalIndex     uint32
 		RemoteIndex    uint32
-		RelayedThrough []iputil.VpnIp
+		RelayedThrough []uint32
 	}
 
 	type RelayOutput struct {
@@ -838,7 +838,7 @@ func sshPrintRelays(ifce *Interface, fs interface{}, a []string, w sshd.StringWr
 			}
 			relayedHI, err := ifce.hostMap.QueryVpnIp(vpnIp)
 			if err == nil {
-				rf.RelayedThrough = append(rf.RelayedThrough, relayedHI.relayState.CopyRelayIps()...)
+				rf.RelayedThrough = append(rf.RelayedThrough, relayedHI.relayState.CopyRelayToIndexes()...)
 			}
 
 			ro.RelayForIps = append(ro.RelayForIps, rf)

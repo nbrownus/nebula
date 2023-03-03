@@ -39,11 +39,12 @@ const (
 )
 
 type Relay struct {
-	Type        int
-	State       int
-	LocalIndex  uint32
-	RemoteIndex uint32
-	PeerIp      iputil.VpnIp
+	Type           int
+	State          int
+	LocalIndex     uint32
+	RemoteIndex    uint32
+	PeerIp         iputil.VpnIp
+	PeerLocalIndex uint32
 }
 
 type HostMap struct {
@@ -62,15 +63,15 @@ type HostMap struct {
 type RelayState struct {
 	sync.RWMutex
 
-	relays        map[iputil.VpnIp]struct{} // Set of VpnIp's of Hosts to use as relays to access this peer
-	relayForByIp  map[iputil.VpnIp]*Relay   // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info
-	relayForByIdx map[uint32]*Relay         // Maps a local index to some Relay info
+	relays        map[uint32]struct{}     // Set of VpnIp's of Hosts to use as relays to access this peer
+	relayForByIp  map[iputil.VpnIp]*Relay // Maps VpnIps of peers for which this HostInfo is a relay to some Relay info
+	relayForByIdx map[uint32]*Relay       // Maps a local index to some Relay info
 }
 
-func (rs *RelayState) DeleteRelay(ip iputil.VpnIp) {
+func (rs *RelayState) DeleteRelayToIndex(localIdx uint32) {
 	rs.Lock()
 	defer rs.Unlock()
-	delete(rs.relays, ip)
+	delete(rs.relays, localIdx)
 }
 
 func (rs *RelayState) GetRelayForByIp(ip iputil.VpnIp) (*Relay, bool) {
@@ -80,18 +81,18 @@ func (rs *RelayState) GetRelayForByIp(ip iputil.VpnIp) (*Relay, bool) {
 	return r, ok
 }
 
-func (rs *RelayState) InsertRelayTo(ip iputil.VpnIp) {
+func (rs *RelayState) InsertRelayToIndex(localIdx uint32) {
 	rs.Lock()
 	defer rs.Unlock()
-	rs.relays[ip] = struct{}{}
+	rs.relays[localIdx] = struct{}{}
 }
 
-func (rs *RelayState) CopyRelayIps() []iputil.VpnIp {
+func (rs *RelayState) CopyRelayToIndexes() []uint32 {
 	rs.RLock()
 	defer rs.RUnlock()
-	ret := make([]iputil.VpnIp, 0, len(rs.relays))
-	for ip := range rs.relays {
-		ret = append(ret, ip)
+	ret := make([]uint32, 0, len(rs.relays))
+	for idx := range rs.relays {
+		ret = append(ret, idx)
 	}
 	return ret
 }
@@ -256,7 +257,7 @@ func (hm *HostMap) RemoveRelay(localIdx uint32) {
 		return
 	}
 	var otherPeerIdx uint32
-	hiPeer.relayState.DeleteRelay(hiRelay.vpnIp)
+	hiPeer.relayState.DeleteRelayToIndex(hiRelay.localIndexId)
 	relay, ok := hiPeer.relayState.GetRelayForByIp(hiRelay.vpnIp)
 	if ok {
 		otherPeerIdx = relay.LocalIndex
@@ -290,7 +291,7 @@ func (hm *HostMap) AddVpnIp(vpnIp iputil.VpnIp, init func(hostinfo *HostInfo)) (
 			vpnIp:           vpnIp,
 			HandshakePacket: make(map[uint8][]byte, 0),
 			relayState: RelayState{
-				relays:        map[iputil.VpnIp]struct{}{},
+				relays:        map[uint32]struct{}{},
 				relayForByIp:  map[iputil.VpnIp]*Relay{},
 				relayForByIdx: map[uint32]*Relay{},
 			},
@@ -411,10 +412,10 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 
 	// And tear down the relays this deleted hostInfo was using to be reached
 	teardownRelayIdx := []uint32{}
-	for _, relayIp := range hostinfo.relayState.CopyRelayIps() {
-		relayHostInfo, err := hm.QueryVpnIp(relayIp)
+	for _, relayIdx := range hostinfo.relayState.CopyRelayToIndexes() {
+		relayHostInfo, err := hm.QueryIndex(relayIdx)
 		if err != nil {
-			hm.l.WithError(err).WithField("relay", relayIp).Info("Missing relay host in hostmap")
+			hm.l.WithError(err).WithField("relayIndex", relayIdx).Info("Missing relay host in hostmap")
 		} else {
 			if r, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp); ok {
 				teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
@@ -740,7 +741,6 @@ func (i *HostInfo) handshakeComplete(l *logrus.Logger, m *cachedPacketMetrics) {
 	i.packetStore = make([]*cachedPacket, 0)
 	i.ConnectionState.ready = true
 	i.ConnectionState.queueLock.Unlock()
-	i.ConnectionState.certState = nil
 }
 
 func (i *HostInfo) GetCert() *cert.NebulaCertificate {

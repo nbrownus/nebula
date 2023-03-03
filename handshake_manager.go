@@ -237,7 +237,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			} else {
 				// No relays exist or requested yet.
 				if relayHostInfo.remote != nil {
-					idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, vpnIp, nil, TerminalType, Requested)
+					idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, hostinfo, nil, TerminalType, Requested)
 					if err != nil {
 						hostinfo.logger(c.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")
 					}
@@ -356,7 +356,7 @@ func (c *HandshakeManager) CheckAndComplete(hostinfo *HostInfo, handshakePacket 
 // Complete is a simpler version of CheckAndComplete when we already know we
 // won't have a localIndexId collision because we already have an entry in the
 // pendingHostMap
-func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
+func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) *HostInfo {
 	c.pendingHostMap.Lock()
 	defer c.pendingHostMap.Unlock()
 	c.mainHostMap.Lock()
@@ -371,8 +371,11 @@ func (c *HandshakeManager) Complete(hostinfo *HostInfo, f *Interface) {
 			Info("New host shadows existing host remoteIndex")
 	}
 
+	existingHostInfo := c.mainHostMap.Hosts[hostinfo.vpnIp]
+
 	c.mainHostMap.unlockedAddHostInfo(hostinfo, f)
 	c.pendingHostMap.unlockedDeleteHostInfo(hostinfo)
+	return existingHostInfo
 }
 
 // AddIndexHostInfo generates a unique localIndexId for this HostInfo

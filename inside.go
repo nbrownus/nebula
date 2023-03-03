@@ -324,10 +324,10 @@ func (f *Interface) sendNoMetrics(t header.MessageType, st header.MessageSubType
 		}
 	} else {
 		// Try to send via a relay
-		for _, relayIP := range hostinfo.relayState.CopyRelayIps() {
-			relayHostInfo, err := f.hostMap.QueryVpnIp(relayIP)
+		for _, relayIdx := range hostinfo.relayState.CopyRelayToIndexes() {
+			relayHostInfo, err := f.hostMap.QueryIndex(relayIdx)
 			if err != nil {
-				hostinfo.logger(f.l).WithField("relayIp", relayIP).WithError(err).Info("sendNoMetrics failed to find HostInfo")
+				hostinfo.logger(f.l).WithField("relayIndex", relayIdx).WithError(err).Info("sendNoMetrics failed to find HostInfo")
 				continue
 			}
 			relay, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp)

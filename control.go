@@ -35,7 +35,7 @@ type ControlHostInfo struct {
 	Cert                   *cert.NebulaCertificate `json:"cert"`
 	MessageCounter         uint64                  `json:"messageCounter"`
 	CurrentRemote          *udp.Addr               `json:"currentRemote"`
-	CurrentRelaysToMe      []iputil.VpnIp          `json:"currentRelaysToMe"`
+	CurrentRelaysToMe      []uint32                `json:"currentRelaysToMe"`
 	CurrentRelaysThroughMe []iputil.VpnIp          `json:"currentRelaysThroughMe"`
 }
 
@@ -222,7 +222,7 @@ func copyHostInfo(h *HostInfo, preferredRanges []*net.IPNet) ControlHostInfo {
 		RemoteIndex:            h.remoteIndexId,
 		RemoteAddrs:            h.remotes.CopyAddrs(preferredRanges),
 		CachedPackets:          len(h.packetStore),
-		CurrentRelaysToMe:      h.relayState.CopyRelayIps(),
+		CurrentRelaysToMe:      h.relayState.CopyRelayToIndexes(),
 		CurrentRelaysThroughMe: h.relayState.CopyRelayForIps(),
 	}
 
