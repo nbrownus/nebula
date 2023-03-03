@@ -72,11 +72,11 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 		lines = append(lines, fmt.Sprintf("%v.%v --> %v.%v", clusterName, vpnIp, clusterName, hi.GetLocalIndex()))
 
 		rs := hi.GetRelayState()
-		for _, relayIdx := range rs.CopyRelayToIndexes() {
+		for _, relayIdx := range sortedUint32(rs.CopyRelayToIndexes()) {
 			lines = append(lines, fmt.Sprintf("%v.%v --> %v.%v", clusterName, vpnIp, clusterName, relayIdx))
 		}
 
-		for _, relayIp := range rs.CopyRelayForIdxs() {
+		for _, relayIp := range sortedUint32(rs.CopyRelayForIdxs()) {
 			lines = append(lines, fmt.Sprintf("%v.%v --> %v.%v", clusterName, vpnIp, clusterName, relayIp))
 		}
 	}
@@ -85,7 +85,8 @@ func renderHostmap(c *nebula.Control) (string, []*edge) {
 	// Draw the relay hostinfos
 	if len(hm.Relays) > 0 {
 		r += fmt.Sprintf("\t\tsubgraph %s.relays[\"Relays (relay index to hostinfo)\"]\n", clusterName)
-		for relayIndex, hi := range hm.Relays {
+		for _, relayIndex := range sortedIndexes(hm.Relays) {
+			hi := hm.Relays[relayIndex]
 			r += fmt.Sprintf("\t\t\t%v.%v[\"%v\"]\n", clusterName, relayIndex, relayIndex)
 			lines = append(lines, fmt.Sprintf("%v.%v --> %v.%v", clusterName, relayIndex, clusterName, hi.GetLocalIndex()))
 		}
@@ -136,4 +137,12 @@ func sortedIndexes(indexes map[uint32]*nebula.HostInfo) []uint32 {
 	})
 
 	return keys
+}
+
+func sortedUint32(indexes []uint32) []uint32 {
+	sort.SliceStable(indexes, func(i, j int) bool {
+		return indexes[i] > indexes[j]
+	})
+
+	return indexes
 }

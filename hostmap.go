@@ -405,26 +405,26 @@ func (hm *HostMap) DeleteHostInfo(hostinfo *HostInfo) {
 	hm.unlockedDeleteHostInfo(hostinfo)
 	hm.Unlock()
 
-	// And tear down all the relays going through this host
-	for _, localIdx := range hostinfo.relayState.CopyRelayForIdxs() {
-		hm.RemoveRelay(localIdx)
-	}
-
-	// And tear down the relays this deleted hostInfo was using to be reached
-	teardownRelayIdx := []uint32{}
-	for _, relayIdx := range hostinfo.relayState.CopyRelayToIndexes() {
-		relayHostInfo, err := hm.QueryIndex(relayIdx)
-		if err != nil {
-			hm.l.WithError(err).WithField("relayIndex", relayIdx).Info("Missing relay host in hostmap")
-		} else {
-			if r, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp); ok {
-				teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
-			}
-		}
-	}
-	for _, localIdx := range teardownRelayIdx {
-		hm.RemoveRelay(localIdx)
-	}
+	//// And tear down all the relays going through this host
+	//for _, localIdx := range hostinfo.relayState.CopyRelayForIdxs() {
+	//	hm.RemoveRelay(localIdx)
+	//}
+	//
+	//// And tear down the relays this deleted hostInfo was using to be reached
+	//teardownRelayIdx := []uint32{}
+	//for _, relayIdx := range hostinfo.relayState.CopyRelayToIndexes() {
+	//	relayHostInfo, err := hm.QueryIndex(relayIdx)
+	//	if err != nil {
+	//		hm.l.WithError(err).WithField("relayIndex", relayIdx).Info("Missing relay host in hostmap")
+	//	} else {
+	//		if r, ok := relayHostInfo.relayState.QueryRelayForByIp(hostinfo.vpnIp); ok {
+	//			teardownRelayIdx = append(teardownRelayIdx, r.LocalIndex)
+	//		}
+	//	}
+	//}
+	//for _, localIdx := range teardownRelayIdx {
+	//	hm.RemoveRelay(localIdx)
+	//}
 }
 
 func (hm *HostMap) DeleteRelayIdx(localIdx uint32) {

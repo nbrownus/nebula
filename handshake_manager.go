@@ -238,7 +238,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 				// No relays exist or requested yet.
 				if relayHostInfo.remote != nil {
 					c.l.Println("A")
-					idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, hostinfo, nil, TerminalType, Requested)
+					idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, vpnIp, hostinfo, nil, TerminalType, Requested)
 					if err != nil {
 						hostinfo.logger(c.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")
 					}
@@ -272,12 +272,13 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 }
 
 func (c *HandshakeManager) AddVpnIp(vpnIp iputil.VpnIp, init func(*HostInfo)) *HostInfo {
+	c.l.Println("ADDING", vpnIp)
 	hostinfo, created := c.pendingHostMap.AddVpnIp(vpnIp, init)
 
 	if created {
-		if _, ok := c.vpnIps[vpnIp]; !ok {
-			c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval)
-		}
+		//if _, ok := c.vpnIps[vpnIp]; !ok {
+		c.OutboundHandshakeTimer.Add(vpnIp, c.config.tryInterval)
+		//}
 		c.vpnIps[vpnIp] = struct{}{}
 		c.metricInitiated.Inc(1)
 	}

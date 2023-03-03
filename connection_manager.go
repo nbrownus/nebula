@@ -2,6 +2,7 @@ package nebula
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -201,9 +202,16 @@ func (n *connectionManager) HandleMonitorTick(now time.Time, p, nb, out []byte) 
 			n.ClearPendingDeletion(localIndex)
 
 			if !mainHostInfo {
-				if hostinfo.vpnIp > n.intf.myVpnIp {
+				newPeerCert := hostinfo.ConnectionState.peerCert.Details.NotBefore.After(primary.ConnectionState.peerCert.Details.NotBefore)
+				newLocalCert := hostinfo.ConnectionState.certState.certificate.Details.NotBefore.After(primary.ConnectionState.certState.certificate.Details.NotBefore)
+				if hostinfo.vpnIp > n.intf.myVpnIp && (newPeerCert || newLocalCert) {
 					// We are receiving traffic on the non primary hostinfo and we really just want 1 tunnel. Make
 					// This the primary and prime the old primary hostinfo for testing
+					n.l.Error("***************************** SWAPPING PRIMARY", hostinfo.vpnIp)
+					n.l.Error("***************************** SWAPPING PRIMARY", hostinfo.vpnIp)
+					n.l.Error("***************************** SWAPPING PRIMARY", hostinfo.vpnIp)
+					n.l.Error("***************************** SWAPPING PRIMARY", hostinfo.vpnIp)
+					n.l.Error("***************************** SWAPPING PRIMARY", hostinfo.vpnIp)
 					n.hostMap.MakePrimary(hostinfo)
 					n.Out(primary.localIndexId)
 				} else {
@@ -303,7 +311,18 @@ func (n *connectionManager) handleRehandshake(hostinfo *HostInfo) {
 
 	for _, relayIdx := range hostinfo.relayState.CopyRelayToIndexes() {
 		relayHi, _ := n.hostMap.QueryIndex(relayIdx)
-		if relayHi != nil && relayHi.ConnectionState.certState != certState {
+		if relayHi == nil {
+			// This relay doesn't exist, something else should clean it up
+			continue
+		}
+
+		primaryHi, _ := n.hostMap.QueryVpnIp(relayHi.vpnIp)
+		if primaryHi != nil && primaryHi != relayHi {
+			// The relay in use here is non primary, assume we have upgraded it
+			continue
+		}
+
+		if relayHi.ConnectionState.certState != certState {
 			// Can't upgrade the relayed tunnel until we upgrade the relays
 			return
 		}
@@ -314,11 +333,16 @@ func (n *connectionManager) handleRehandshake(hostinfo *HostInfo) {
 		Info("Re-handshaking with remote")
 
 	//TODO: this is copied from getOrHandshake to keep the extra checks out of the hot path, figure it out
-	hostinfo = n.intf.handshakeManager.AddVpnIp(hostinfo.vpnIp, n.intf.initHostInfo)
-	ixHandshakeStage0(n.intf, hostinfo.vpnIp, hostinfo)
+	fmt.Println("**********************************************************************************************")
+	fmt.Println("**********************************************************************************************")
+	fmt.Println("**********************************************************************************************")
+	newHostinfo := n.intf.handshakeManager.AddVpnIp(hostinfo.vpnIp, n.intf.initHostInfo)
+	if !newHostinfo.HandshakeReady {
+		ixHandshakeStage0(n.intf, newHostinfo.vpnIp, newHostinfo)
+	}
 
-	// If this is a static host, we don't need to wait for the HostQueryReply
-	// We can trigger the handshake right now
+	//If this is a static host, we don't need to wait for the HostQueryReply
+	//We can trigger the handshake right now
 	if _, ok := n.intf.lightHouse.GetStaticHostList()[hostinfo.vpnIp]; ok {
 		select {
 		case n.intf.handshakeManager.trigger <- hostinfo.vpnIp:

@@ -50,7 +50,7 @@ func (rm *relayManager) setAmRelay(v bool) {
 
 // AddRelay finds an available relay index on the hostmap, and associates the relay info with it.
 // relayHostInfo is the Nebula peer which can be used as a relay to access the target vpnIp.
-func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, peerHostInfo *HostInfo, remoteIdx *uint32, relayType int, state int) (uint32, error) {
+func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, vpnIp iputil.VpnIp, peerHostInfo *HostInfo, remoteIdx *uint32, relayType int, state int) (uint32, error) {
 	hm.Lock()
 	defer hm.Unlock()
 	for i := 0; i < 32; i++ {
@@ -68,18 +68,19 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, peerHostIn
 
 			hm.Relays[index] = relayHostInfo
 			newRelay := Relay{
-				Type:           relayType,
-				State:          state,
-				LocalIndex:     index,
-				PeerIp:         peerHostInfo.vpnIp,
-				PeerLocalIndex: peerHostInfo.localIndexId,
+				Type:       relayType,
+				State:      state,
+				LocalIndex: index,
+				PeerIp:     vpnIp,
 			}
 
 			if remoteIdx != nil {
 				newRelay.RemoteIndex = *remoteIdx
 			}
-			l.Println(relayHostInfo.vpnIp, peerHostInfo.vpnIp)
-			relayHostInfo.relayState.InsertRelay(peerHostInfo.vpnIp, index, &newRelay)
+			if peerHostInfo != nil {
+				newRelay.PeerLocalIndex = peerHostInfo.localIndexId
+			}
+			relayHostInfo.relayState.InsertRelay(vpnIp, index, &newRelay)
 
 			return index, nil
 		}
@@ -174,7 +175,6 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 	target := iputil.VpnIp(m.RelayToIp)
 	// Is the target of the relay me?
 	if target == f.myVpnIp {
-		peer := f.getOrHandshake(from)
 		existingRelay, ok := h.relayState.QueryRelayForByIp(from)
 		addRelay := !ok
 		if ok {
@@ -187,8 +187,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			}
 		}
 		if addRelay {
-			rm.l.Println("*****************************", h.vpnIp, peer.vpnIp, peer.localIndexId)
-			_, err := AddRelay(rm.l, h, f.hostMap, peer, &m.InitiatorRelayIndex, TerminalType, Established)
+			_, err := AddRelay(rm.l, h, f.hostMap, from, nil, &m.InitiatorRelayIndex, TerminalType, Established)
 			if err != nil {
 				return
 			}
@@ -242,7 +241,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 		} else {
 			// Allocate an index in the hostMap for this relay peer
 			rm.l.Println("b")
-			index, err = AddRelay(rm.l, peer, f.hostMap, h, nil, ForwardingType, Requested)
+			index, err = AddRelay(rm.l, peer, f.hostMap, from, h, nil, ForwardingType, Requested)
 			if err != nil {
 				return
 			}
@@ -273,7 +272,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 				state = Established
 			}
 			rm.l.Println("C")
-			_, err := AddRelay(rm.l, h, f.hostMap, peer, &m.InitiatorRelayIndex, ForwardingType, state)
+			_, err := AddRelay(rm.l, h, f.hostMap, peer.vpnIp, peer, &m.InitiatorRelayIndex, ForwardingType, state)
 			if err != nil {
 				rm.l.
 					WithError(err).Error("relayManager Failed to allocate a local index for relay")
@@ -286,7 +285,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 				rm.RemoveRelay(relay.LocalIndex)
 				// Add the new relay
 				rm.l.Println("D")
-				_, err := AddRelay(rm.l, h, f.hostMap, peer, &m.InitiatorRelayIndex, ForwardingType, Requested)
+				_, err := AddRelay(rm.l, h, f.hostMap, peer.vpnIp, peer, &m.InitiatorRelayIndex, ForwardingType, Requested)
 				if err != nil {
 					return
 				}

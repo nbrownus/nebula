@@ -112,21 +112,6 @@ func (f *Interface) readOutsidePackets(addr *udp.Addr, via interface{}, out []by
 					return
 				}
 
-				//time="relay   09:25:16.655247" level=info msg="THE TARGET IP 10.128.0.2\n"
-				//time="relay   09:25:16.655267" level=info msg="THE TARGET INDEX 843554664\n"
-				//time="relay   09:25:16.655283" level=info msg="THE TARGET relays [10.128.0.1]\n"
-				//time="relay   09:25:16.655293" level=info msg="THE SENDER INDEX 838674534\n"
-
-				//time="relay   09:25:16.657934" level=info msg="THE TARGET IP 10.128.0.1\n"
-				//time="relay   09:25:16.657949" level=info msg="THE TARGET INDEX 838674534\n"
-				//time="relay   09:25:16.657962" level=info msg="THE TARGET relays [10.128.0.2]\n"
-				//time="relay   09:25:16.657973" level=info msg="THE SENDER INDEX 843554664\n"
-
-				f.l.Printf("THE TARGET IP %+v\n", targetHI.vpnIp)
-				f.l.Printf("THE TARGET INDEX %+v\n", targetHI.localIndexId)
-				f.l.Printf("THE TARGET relays %+v\n", targetHI.relayState.CopyRelayForIps())
-				f.l.Printf("THE SENDER INDEX %+v\n", hostinfo.localIndexId)
-
 				// find the target Relay info object
 				targetRelay, ok := targetHI.relayState.QueryRelayForByIp(hostinfo.vpnIp)
 				if !ok {
