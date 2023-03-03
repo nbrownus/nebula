@@ -78,6 +78,7 @@ func AddRelay(l *logrus.Logger, relayHostInfo *HostInfo, hm *HostMap, peerHostIn
 			if remoteIdx != nil {
 				newRelay.RemoteIndex = *remoteIdx
 			}
+			l.Println(relayHostInfo.vpnIp, peerHostInfo.vpnIp)
 			relayHostInfo.relayState.InsertRelay(peerHostInfo.vpnIp, index, &newRelay)
 
 			return index, nil
@@ -186,7 +187,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			}
 		}
 		if addRelay {
-			fmt.Println("*****************************", h.vpnIp, peer.vpnIp)
+			rm.l.Println("*****************************", h.vpnIp, peer.vpnIp, peer.localIndexId)
 			_, err := AddRelay(rm.l, h, f.hostMap, peer, &m.InitiatorRelayIndex, TerminalType, Established)
 			if err != nil {
 				return
@@ -240,7 +241,8 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			}
 		} else {
 			// Allocate an index in the hostMap for this relay peer
-			index, err = AddRelay(rm.l, peer, f.hostMap, peer, nil, ForwardingType, Requested)
+			rm.l.Println("b")
+			index, err = AddRelay(rm.l, peer, f.hostMap, h, nil, ForwardingType, Requested)
 			if err != nil {
 				return
 			}
@@ -270,6 +272,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 			if targetRelay != nil && targetRelay.State == Established {
 				state = Established
 			}
+			rm.l.Println("C")
 			_, err := AddRelay(rm.l, h, f.hostMap, peer, &m.InitiatorRelayIndex, ForwardingType, state)
 			if err != nil {
 				rm.l.
@@ -282,6 +285,7 @@ func (rm *relayManager) handleCreateRelayRequest(h *HostInfo, f *Interface, m *N
 				// Clean up the existing stuff.
 				rm.RemoveRelay(relay.LocalIndex)
 				// Add the new relay
+				rm.l.Println("D")
 				_, err := AddRelay(rm.l, h, f.hostMap, peer, &m.InitiatorRelayIndex, ForwardingType, Requested)
 				if err != nil {
 					return

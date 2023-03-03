@@ -237,6 +237,7 @@ func (c *HandshakeManager) handleOutbound(vpnIp iputil.VpnIp, f udp.EncWriter, l
 			} else {
 				// No relays exist or requested yet.
 				if relayHostInfo.remote != nil {
+					c.l.Println("A")
 					idx, err := AddRelay(c.l, relayHostInfo, c.mainHostMap, hostinfo, nil, TerminalType, Requested)
 					if err != nil {
 						hostinfo.logger(c.l).WithField("relay", relay.String()).WithError(err).Info("Failed to add relay to hostmap")
