@@ -462,3 +462,6 @@ func generateIndex(l *logrus.Logger) (uint32, error) {
 func hsTimeout(tries int, interval time.Duration) time.Duration {
 	return time.Duration(tries / 2 * ((2 * int(interval)) + (tries-1)*int(interval)))
 }
+
+//5046619000
+//4648371000
