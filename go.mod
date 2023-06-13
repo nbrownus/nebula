@@ -31,7 +31,7 @@ require (
 	gopkg.in/yaml.v2 v2.4.0
 )
 
-require golang.zx2c4.com/wireguard v0.0.0-20211111141719-cad0ff2cfbd9
+require golang.zx2c4.com/wireguard v0.0.0-20230325221338-052af4a8072b
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
