@@ -336,7 +336,7 @@ func (lh *LightHouse) reload(c *config.C, initial bool) error {
 				lh.l.WithField("relay", v).Info("Read relay from config")
 
 				configRIP, err := netip.ParseAddr(v)
-				//TODO: We could print the error here
+				lh.l.WithError(err).Error("Read relay from config")
 				if err == nil {
 					relaysForMe = append(relaysForMe, configRIP)
 				}
