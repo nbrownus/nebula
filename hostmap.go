@@ -491,7 +491,7 @@ func (hm *HostMap) queryVpnIp(vpnIp netip.Addr, promoteIfce *Interface) *HostInf
 func (hm *HostMap) unlockedAddHostInfo(hostinfo *HostInfo, f *Interface) {
 	if f.serveDns {
 		remoteCert := hostinfo.ConnectionState.peerCert
-		dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ip.String())
+		dnsR.Add(remoteCert.Details.Name+".", remoteCert.Details.Ip.Addr().String())
 	}
 
 	existing := hm.Hosts[hostinfo.vpnIp]
