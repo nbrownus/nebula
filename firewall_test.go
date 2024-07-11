@@ -137,15 +137,12 @@ func TestFirewall_Drop(t *testing.T) {
 		Fragment:   false,
 	}
 
-	ipNet := net.IPNet{
-		IP:   net.IPv4(1, 2, 3, 4),
-		Mask: net.IPMask{255, 255, 255, 0},
-	}
+	nip := netip.MustParsePrefix("1.2.3.4/24")
 
 	c := cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name:           "host1",
-			Ips:            []*net.IPNet{&ipNet},
+			Ip:             nip,
 			Groups:         []string{"default-group"},
 			InvertedGroups: map[string]struct{}{"default-group": {}},
 			Issuer:         "signer-shasum",
@@ -240,12 +237,12 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 	})
 
 	b.Run("pass proto, port, any local CIDR, fail all group, name, and cidr", func(b *testing.B) {
-		_, ip, _ := net.ParseCIDR("9.254.254.254/32")
+		ip := netip.MustParsePrefix("9.254.254.254/32")
 		c := &cert.NebulaCertificate{
 			Details: cert.NebulaCertificateDetails{
 				InvertedGroups: map[string]struct{}{"nope": {}},
 				Name:           "nope",
-				Ips:            []*net.IPNet{ip},
+				Ip:             ip,
 			},
 		}
 		for n := 0; n < b.N; n++ {
@@ -254,12 +251,12 @@ func BenchmarkFirewallTable_match(b *testing.B) {
 	})
 
 	b.Run("pass proto, port, specific local CIDR, fail all group, name, and cidr", func(b *testing.B) {
-		_, ip, _ := net.ParseCIDR("9.254.254.254/32")
+		ip := netip.MustParsePrefix("9.254.254.254/32")
 		c := &cert.NebulaCertificate{
 			Details: cert.NebulaCertificateDetails{
 				InvertedGroups: map[string]struct{}{"nope": {}},
 				Name:           "nope",
-				Ips:            []*net.IPNet{ip},
+				Ip:             ip,
 			},
 		}
 		for n := 0; n < b.N; n++ {
@@ -372,15 +369,12 @@ func TestFirewall_Drop2(t *testing.T) {
 		Fragment:   false,
 	}
 
-	ipNet := net.IPNet{
-		IP:   net.IPv4(1, 2, 3, 4),
-		Mask: net.IPMask{255, 255, 255, 0},
-	}
+	ip := netip.MustParsePrefix("1.2.3.4/24")
 
 	c := cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name:           "host1",
-			Ips:            []*net.IPNet{&ipNet},
+			Ip:             ip,
 			InvertedGroups: map[string]struct{}{"default-group": {}, "test-group": {}},
 		},
 	}
@@ -388,14 +382,14 @@ func TestFirewall_Drop2(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c,
 		},
-		vpnIp: netip.MustParseAddr(ipNet.IP.String()),
+		vpnIp: ip.Addr(),
 	}
 	h.CreateRemoteCIDR(&c)
 
 	c1 := cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name:           "host1",
-			Ips:            []*net.IPNet{&ipNet},
+			Ip:             ip,
 			InvertedGroups: map[string]struct{}{"default-group": {}, "test-group-not": {}},
 		},
 	}
@@ -431,22 +425,19 @@ func TestFirewall_Drop3(t *testing.T) {
 		Fragment:   false,
 	}
 
-	ipNet := net.IPNet{
-		IP:   net.IPv4(1, 2, 3, 4),
-		Mask: net.IPMask{255, 255, 255, 0},
-	}
+	ip := netip.MustParsePrefix("1.2.3.4/24")
 
 	c := cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name: "host-owner",
-			Ips:  []*net.IPNet{&ipNet},
+			Ip:   ip,
 		},
 	}
 
 	c1 := cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name:   "host1",
-			Ips:    []*net.IPNet{&ipNet},
+			Ip:     ip,
 			Issuer: "signer-sha-bad",
 		},
 	}
@@ -454,14 +445,14 @@ func TestFirewall_Drop3(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c1,
 		},
-		vpnIp: netip.MustParseAddr(ipNet.IP.String()),
+		vpnIp: ip.Addr(),
 	}
 	h1.CreateRemoteCIDR(&c1)
 
 	c2 := cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name:   "host2",
-			Ips:    []*net.IPNet{&ipNet},
+			Ip:     ip,
 			Issuer: "signer-sha",
 		},
 	}
@@ -469,14 +460,14 @@ func TestFirewall_Drop3(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c2,
 		},
-		vpnIp: netip.MustParseAddr(ipNet.IP.String()),
+		vpnIp: ip.Addr(),
 	}
 	h2.CreateRemoteCIDR(&c2)
 
 	c3 := cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name:   "host3",
-			Ips:    []*net.IPNet{&ipNet},
+			Ip:     ip,
 			Issuer: "signer-sha-bad",
 		},
 	}
@@ -484,7 +475,7 @@ func TestFirewall_Drop3(t *testing.T) {
 		ConnectionState: &ConnectionState{
 			peerCert: &c3,
 		},
-		vpnIp: netip.MustParseAddr(ipNet.IP.String()),
+		vpnIp: ip.Addr(),
 	}
 	h3.CreateRemoteCIDR(&c3)
 
@@ -521,11 +512,12 @@ func TestFirewall_DropConntrackReload(t *testing.T) {
 		IP:   net.IPv4(1, 2, 3, 4),
 		Mask: net.IPMask{255, 255, 255, 0},
 	}
+	ip := netip.MustParsePrefix("1.2.3.4/24")
 
 	c := cert.NebulaCertificate{
 		Details: cert.NebulaCertificateDetails{
 			Name:           "host1",
-			Ips:            []*net.IPNet{&ipNet},
+			Ip:             ip,
 			Groups:         []string{"default-group"},
 			InvertedGroups: map[string]struct{}{"default-group": {}},
 			Issuer:         "signer-shasum",
