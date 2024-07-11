@@ -284,12 +284,6 @@ func (t *tun) Activate() error {
 		t.watchRoutes()
 	}
 
-	var mask [4]byte
-
-	//TODO: IPV6-WORK
-	tmask := net.CIDRMask(t.cidr.Bits(), 32)
-	copy(mask[:], tmask)
-
 	s, err := unix.Socket(
 		unix.AF_INET6,
 		unix.SOCK_DGRAM,
