@@ -58,11 +58,11 @@ type in6IfReq struct {
 	IfIndex   uint32
 }
 
-//type ifreqAddr struct {
-//	Name [16]byte
-//	Addr unix.RawSockaddrInet4
-//	pad  [8]byte
-//}
+type ifreqAddr struct {
+	Name [16]byte
+	Addr unix.RawSockaddrInet4
+	pad  [8]byte
+}
 
 type ifreqMTU struct {
 	Name [16]byte
@@ -277,6 +277,57 @@ func (t *tun) deviceBytes() (o [16]byte) {
 	return
 }
 
+func (t *tun) activateV6() error {
+	var err error
+	idxReq := ifReqIdx{Name: t.deviceBytes()}
+	if err = ioctl(t.ioctlFd, unix.SIOCGIFINDEX, uintptr(unsafe.Pointer(&idxReq))); err != nil {
+		return fmt.Errorf("get tun index: %s", err)
+	}
+
+	ifra6 := in6IfReq{
+		Addr:      t.cidr.Addr().As16(),
+		PrefixLen: uint32(t.cidr.Bits()),
+		IfIndex:   idxReq.IfIndex,
+	}
+
+	// Set the device ip address
+	if err = ioctl(t.ioctlFd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra6))); err != nil {
+		return fmt.Errorf("failed to set tun address: %s", err)
+	}
+
+	return nil
+}
+
+func (t *tun) activateV4() error {
+	var err error
+	var addr, mask [4]byte
+
+	addr = t.cidr.Addr().As4()
+	tmask := net.CIDRMask(t.cidr.Bits(), 32)
+	copy(mask[:], tmask)
+
+	ifra := ifreqAddr{
+		Name: t.deviceBytes(),
+		Addr: unix.RawSockaddrInet4{
+			Family: unix.AF_INET,
+			Addr:   addr,
+		},
+	}
+
+	// Set the device ip address
+	if err = ioctl(t.ioctlFd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
+		return fmt.Errorf("failed to set tun address: %s", err)
+	}
+
+	// Set the device network
+	ifra.Addr.Addr = mask
+	if err = ioctl(t.ioctlFd, unix.SIOCSIFNETMASK, uintptr(unsafe.Pointer(&ifra))); err != nil {
+		return fmt.Errorf("failed to set tun netmask: %s", err)
+	}
+
+	return nil
+}
+
 func (t *tun) Activate() error {
 	devName := t.deviceBytes()
 
@@ -284,8 +335,14 @@ func (t *tun) Activate() error {
 		t.watchRoutes()
 	}
 
+	is6 := t.cidr.Addr().Is6()
+	family := unix.AF_INET
+	if is6 {
+		family = unix.AF_INET6
+	}
+
 	s, err := unix.Socket(
-		unix.AF_INET6,
+		family,
 		unix.SOCK_DGRAM,
 		unix.IPPROTO_IP,
 	)
@@ -300,20 +357,13 @@ func (t *tun) Activate() error {
 		return fmt.Errorf("failed to set tun device name: %s", err)
 	}
 
-	idxReq := ifReqIdx{Name: devName}
-	if err = ioctl(t.ioctlFd, unix.SIOCGIFINDEX, uintptr(unsafe.Pointer(&idxReq))); err != nil {
-		return fmt.Errorf("get tun index: %s", err)
+	if is6 {
+		err = t.activateV6()
+	} else {
+		err = t.activateV4()
 	}
-
-	ifra6 := in6IfReq{
-		Addr:      t.cidr.Addr().As16(),
-		PrefixLen: uint32(t.cidr.Bits()),
-		IfIndex:   idxReq.IfIndex,
-	}
-
-	// Set the device ip address
-	if err = ioctl(t.ioctlFd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra6))); err != nil {
-		return fmt.Errorf("failed to set tun address: %s", err)
+	if err != nil {
+		return err
 	}
 
 	// Setup our default MTU
