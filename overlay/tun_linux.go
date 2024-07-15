@@ -64,6 +64,12 @@ type ifreqAddr struct {
 	pad  [8]byte
 }
 
+type ifreqAddr6 struct {
+	Name [16]byte
+	Addr unix.RawSockaddrInet6
+	//pad  [8]byte
+}
+
 type ifreqMTU struct {
 	Name [16]byte
 	MTU  int32
@@ -277,25 +283,15 @@ func (t *tun) deviceBytes() (o [16]byte) {
 	return
 }
 
-func (t *tun) activateV6() error {
-	var err error
-	idxReq := ifReqIdx{Name: t.deviceBytes()}
-	if err = ioctl(t.ioctlFd, unix.SIOCGIFINDEX, uintptr(unsafe.Pointer(&idxReq))); err != nil {
-		return fmt.Errorf("get tun index: %s", err)
+func (t *tun) activateV6(link netlink.Link) error {
+	//todo I wish I didn't need to stringify and re-parse
+	//todo this could probably be generic for v4+v6, need to test
+	nlAddr, err := netlink.ParseAddr(t.cidr.String())
+	if err != nil {
+		return err
 	}
-
-	ifra6 := in6IfReq{
-		Addr:      t.cidr.Addr().As16(),
-		PrefixLen: uint32(t.cidr.Bits()),
-		IfIndex:   idxReq.IfIndex,
-	}
-
-	// Set the device ip address
-	if err = ioctl(t.ioctlFd, unix.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra6))); err != nil {
-		return fmt.Errorf("failed to set tun address: %s", err)
-	}
-
-	return nil
+	//this way addresses get changed-out on reload
+	return netlink.AddrReplace(link, nlAddr)
 }
 
 func (t *tun) activateV4() error {
@@ -357,8 +353,13 @@ func (t *tun) Activate() error {
 		return fmt.Errorf("failed to set tun device name: %s", err)
 	}
 
+	link, err := netlink.LinkByName(t.Device)
+	if err != nil {
+		return fmt.Errorf("failed to get tun device link: %s", err)
+	}
+
 	if is6 {
-		err = t.activateV6()
+		err = t.activateV6(link)
 	} else {
 		err = t.activateV4()
 	}
@@ -382,10 +383,26 @@ func (t *tun) Activate() error {
 		return fmt.Errorf("failed to bring the tun device up: %s", err)
 	}
 
-	link, err := netlink.LinkByName(t.Device)
+	al, err := netlink.AddrList(link, netlink.FAMILY_ALL)
 	if err != nil {
-		return fmt.Errorf("failed to get tun device link: %s", err)
+		return fmt.Errorf("failed to get tun address list: %s", err)
 	}
+
+	for i := range al {
+		x, ok := netip.AddrFromSlice(al[i].IP)
+		if !ok {
+			continue
+		}
+		if x != t.cidr.Addr() {
+			err = netlink.AddrDel(link, &al[i])
+			if err != nil {
+				t.l.WithError(err).Error("failed to remove address from tun address list")
+			} else {
+				t.l.WithField("removed", x.String()).Info("removed incorrect address")
+			}
+		}
+	}
+
 	t.deviceIndex = link.Attrs().Index
 
 	if err = t.setDefaultRoute(); err != nil {
