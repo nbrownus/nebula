@@ -8,6 +8,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -82,9 +83,14 @@ func New(config *config.C) (*Service, error) {
 		return nil, fmt.Errorf("could not create netstack NIC: %v", tcpipProblem)
 	}
 	ipv4Subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom4([4]byte{0x00, 0x00, 0x00, 0x00}), tcpip.MaskFrom(strings.Repeat("\x00", 4)))
+	ipv6Subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom16([16]byte{}), tcpip.MaskFrom(strings.Repeat("\x00", 16)))
 	s.ipstack.SetRouteTable([]tcpip.Route{
 		{
 			Destination: ipv4Subnet,
+			NIC:         nicID,
+		},
+		{
+			Destination: ipv6Subnet,
 			NIC:         nicID,
 		},
 	})
@@ -93,6 +99,10 @@ func New(config *config.C) (*Service, error) {
 	pa := tcpip.ProtocolAddress{
 		AddressWithPrefix: tcpip.AddrFromSlice(ipNet.Addr().AsSlice()).WithPrefix(),
 		Protocol:          ipv4.ProtocolNumber,
+	}
+	is6 := device.Cidr().Addr().Is6()
+	if is6 {
+		pa.Protocol = ipv6.ProtocolNumber
 	}
 	if err := s.ipstack.AddProtocolAddress(nicID, pa, stack.AddressProperties{
 		PEB:        stack.CanBePrimaryEndpoint, // zero value default
@@ -116,7 +126,13 @@ func New(config *config.C) (*Service, error) {
 
 	// create Goroutines to forward packets between Nebula and Gvisor
 	eg.Go(func() error {
-		buf := make([]byte, header.IPv4MaximumHeaderSize+header.IPv4MaximumPayloadSize)
+		sz := header.IPv4MaximumHeaderSize + header.IPv4MaximumPayloadSize
+		pn := header.IPv4ProtocolNumber
+		if is6 {
+			sz = header.IPv6FixedHeaderSize + header.IPv6MaximumPayloadSize + 600 //todo how big should this be wrt ipv6 extension headers?
+			pn = header.IPv6ProtocolNumber
+		}
+		buf := make([]byte, sz)
 		for {
 			// this will read exactly one packet
 			n, err := reader.Read(buf)
@@ -126,7 +142,7 @@ func New(config *config.C) (*Service, error) {
 			packetBuf := stack.NewPacketBuffer(stack.PacketBufferOptions{
 				Payload: buffer.MakeWithData(bytes.Clone(buf[:n])),
 			})
-			linkEP.InjectInbound(header.IPv4ProtocolNumber, packetBuf)
+			linkEP.InjectInbound(pn, packetBuf)
 
 			if err := ctx.Err(); err != nil {
 				return err
@@ -153,37 +169,61 @@ func New(config *config.C) (*Service, error) {
 	return &s, nil
 }
 
-// DialContext dials the provided address. Currently only TCP is supported.
+func getProtocolNumber(addr netip.Addr) tcpip.NetworkProtocolNumber {
+	if addr.Is6() {
+		return ipv6.ProtocolNumber
+	}
+	return ipv4.ProtocolNumber
+}
+
+// DialContext dials the provided address.
 func (s *Service) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	if network != "tcp" && network != "tcp4" {
-		return nil, errors.New("only tcp is supported")
+	switch network {
+	case "udp", "udp4", "udp6":
+		addr, err := net.ResolveUDPAddr(network, address)
+		if err != nil {
+			return nil, err
+		}
+		fullAddr := tcpip.FullAddress{
+			NIC:  nicID,
+			Addr: tcpip.AddrFromSlice(addr.IP),
+			Port: uint16(addr.Port),
+		}
+		num := getProtocolNumber(addr.AddrPort().Addr())
+		return gonet.DialUDP(s.ipstack, nil, &fullAddr, num)
+	case "tcp", "tcp4", "tcp6":
+		addr, err := net.ResolveTCPAddr(network, address)
+		if err != nil {
+			return nil, err
+		}
+		fullAddr := tcpip.FullAddress{
+			NIC:  nicID,
+			Addr: tcpip.AddrFromSlice(addr.IP),
+			Port: uint16(addr.Port),
+		}
+		num := getProtocolNumber(addr.AddrPort().Addr())
+		return gonet.DialContextTCP(ctx, s.ipstack, fullAddr, num)
+	default:
+		return nil, fmt.Errorf("unknown network type: %s", network)
 	}
+}
 
-	addr, err := net.ResolveTCPAddr(network, address)
-	if err != nil {
-		return nil, err
-	}
-
-	fullAddr := tcpip.FullAddress{
-		NIC:  nicID,
-		Addr: tcpip.AddrFromSlice(addr.IP),
-		Port: uint16(addr.Port),
-	}
-
-	return gonet.DialContextTCP(ctx, s.ipstack, fullAddr, ipv4.ProtocolNumber)
+// Dial dials the provided address
+func (s *Service) Dial(network, address string) (net.Conn, error) {
+	return s.DialContext(context.Background(), network, address)
 }
 
 // Listen listens on the provided address. Currently only TCP with wildcard
 // addresses are supported.
 func (s *Service) Listen(network, address string) (net.Listener, error) {
-	if network != "tcp" && network != "tcp4" {
+	if network != "tcp" && network != "tcp4" && network != "tcp6" {
 		return nil, errors.New("only tcp is supported")
 	}
 	addr, err := net.ResolveTCPAddr(network, address)
 	if err != nil {
 		return nil, err
 	}
-	if addr.IP != nil && !bytes.Equal(addr.IP, []byte{0, 0, 0, 0}) {
+	if addr.IP != nil && !addr.IP.IsUnspecified() {
 		return nil, fmt.Errorf("only wildcard address supported, got %q %v", address, addr.IP)
 	}
 	if addr.Port == 0 {

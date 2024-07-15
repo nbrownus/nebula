@@ -2,17 +2,99 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 
 	"github.com/slackhq/nebula/config"
 	"github.com/slackhq/nebula/service"
 )
 
 func main() {
-	if err := run(); err != nil {
-		log.Fatalf("%+v", err)
+	doListen := flag.Bool("l", false, "listen example")
+	flag.Parse()
+	if *doListen {
+		if err := run(); err != nil {
+			log.Fatalf("%+v", err)
+		}
+	} else {
+		if err := dial(); err != nil {
+			log.Fatalf("%+v", err)
+		}
 	}
+}
+
+const configStr = `
+tun:
+  user: true
+
+static_host_map:
+  'fd00::01': ['127.0.0.1:4646']
+
+logging:
+  level: trace
+  format: text
+  disable_timestamp: true
+
+listen:
+  host: 0.0.0.0
+  port: 4241
+
+lighthouse:
+  am_lighthouse: false
+  interval: 60
+  hosts:
+    - 'fd00::01'
+
+firewall:
+  outbound:
+    # Allow all outbound traffic from this node
+    - port: any
+      proto: any
+      host: any
+
+  inbound:
+    # Allow icmp between any nebula hosts
+    - port: any
+      proto: icmp
+      host: any
+    - port: any
+      proto: any
+      host: any
+
+pki:
+  ca: ipv6.crt
+  cert: ipv6_client2.crt
+  key: ipv6_client2.key
+`
+
+func dial() error {
+	var cfg config.C
+	if err := cfg.LoadString(configStr); err != nil {
+		return err
+	}
+	svc, err := service.New(&cfg)
+	if err != nil {
+		return err
+	}
+
+	tr := &http.Transport{
+		DialContext: svc.DialContext,
+	}
+	client := http.Client{Transport: tr}
+	out, err := client.Get("http://[fd00::01]:8000/")
+	if err != nil {
+		return err
+	}
+	log.Println(out)
+
+	_ = svc.Close()
+	if err := svc.Wait(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func run() error {
@@ -54,16 +136,16 @@ pki:
   cert: /home/rice/Developer/nebula-config/app.crt
   key: /home/rice/Developer/nebula-config/app.key
 `
-	var config config.C
-	if err := config.LoadString(configStr); err != nil {
+	var cfg config.C
+	if err := cfg.LoadString(configStr); err != nil {
 		return err
 	}
-	service, err := service.New(&config)
+	svc, err := service.New(&cfg)
 	if err != nil {
 		return err
 	}
 
-	ln, err := service.Listen("tcp", ":1234")
+	ln, err := svc.Listen("tcp", ":1234")
 	if err != nil {
 		return err
 	}
@@ -73,16 +155,24 @@ pki:
 			log.Printf("accept error: %s", err)
 			break
 		}
-		defer conn.Close()
+		defer func(conn net.Conn) {
+			_ = conn.Close()
+		}(conn)
 
 		log.Printf("got connection")
 
-		conn.Write([]byte("hello world\n"))
+		_, err = conn.Write([]byte("hello world\n"))
+		if err != nil {
+			log.Printf("write error: %s", err)
+		}
 
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {
 			message := scanner.Text()
-			fmt.Fprintf(conn, "echo: %q\n", message)
+			_, err = fmt.Fprintf(conn, "echo: %q\n", message)
+			if err != nil {
+				log.Printf("write error: %s", err)
+			}
 			log.Printf("got message %q", message)
 		}
 
@@ -92,8 +182,8 @@ pki:
 		}
 	}
 
-	service.Close()
-	if err := service.Wait(); err != nil {
+	_ = svc.Close()
+	if err := svc.Wait(); err != nil {
 		return err
 	}
 	return nil
