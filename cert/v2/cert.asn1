@@ -1,0 +1,32 @@
+Nebula DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+-- TODO: not automatic tags, be specific or make a comment that order must never change
+
+Signature ::= OCTET STRING (SIZE (32))
+Time ::= INTEGER (0..18446744073709551615)
+Ip ::= OCTET STRING (SIZE (1..16))
+Subnet ::= OCTET STRING (SIZE (1..17))
+
+Certificate ::= SEQUENCE {
+    details OCTET STRING,
+    publicKey OCTET STRING (SIZE (32)),
+    signature Signature
+}
+
+Details ::= SEQUENCE {
+    name UTF8String (SIZE (1..63)),
+
+    --TODO: if we want to allow up to 1 v4 and 1 v6 then we should break this into two optional ip fields
+    ip SEQUENCE SIZE(1..2) OF Ip,
+    subnets SEQUENCE SIZE(0..1024) OF Subnet OPTIONAL,
+    groups SEQUENCE SIZE(0..1024) OF UTF8String (SIZE(0..1024)) OPTIONAL,
+
+    -- ASN.1 time formats are all string representations so we use our own uint64 limited one
+    notBefore Time,
+    notAfter Time,
+
+    issuer OCTET STRING (SIZE (32)),
+    ...
+    -- New fields can be added below here
+}
+
+END
