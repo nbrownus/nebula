@@ -2,14 +2,6 @@
 
 This is a library for interacting with `nebula` style certificates and authorities.
 
-A `protobuf` definition of the certificate format is also included
-
-### Compiling the protobuf definition
-
-Make sure you have `protoc` installed.
-
-To compile for `go` with the same version of protobuf specified in go.mod:
-
-```bash
-make
-```
+- `v1` is the old deprecated protobuf based certificate format
+- `v2` is the new ASN.1 based certificate format
+- The `cert` package attempts to unify them
