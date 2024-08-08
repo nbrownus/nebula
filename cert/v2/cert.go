@@ -1,7 +1,6 @@
 package v2
 
 import (
-	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"time"
@@ -15,51 +14,30 @@ const (
 	classContextSpecific = 0x80
 
 	TagCertDetails   = 0 | classConstructed | classContextSpecific
-	TagCertPublicKey = 1 | classContextSpecific
-	TagCertSignature = 2 | classContextSpecific
+	TagCertCurve     = 1 | classContextSpecific
+	TagCertPublicKey = 2 | classContextSpecific
+	TagCertSignature = 3 | classContextSpecific
 
 	TagDetailsName      = 0 | classContextSpecific
 	TagDetailsIps       = 1 | classConstructed | classContextSpecific
 	TagDetailsSubnets   = 2 | classConstructed | classContextSpecific
 	TagDetailsGroups    = 3 | classConstructed | classContextSpecific
-	TagDetailsNotBefore = 4 | classContextSpecific
-	TagDetailsNotAfter  = 5 | classContextSpecific
-	TagDetailsIssuer    = 6 | classContextSpecific
+	TagDetailsIsCA      = 4 | classContextSpecific
+	TagDetailsNotBefore = 5 | classContextSpecific
+	TagDetailsNotAfter  = 6 | classContextSpecific
+	TagDetailsIssuer    = 7 | classContextSpecific
 )
 
 const (
-	MaxPublicKeyLength = 32 //TODO: P256 is bigger
+	// MaxCertificateSize is the maximum length a valid certificate can be
+	MaxCertificateSize = 65536
 
-	// MaxNameLength is the maximum length a name can be
-	// The limit comes from rfc1035 defining a label can not exceed 63 octets
-	//TODO: 63 assumes names dont contain `.`. 253 would be the maximum but then we may want to inspect the name further
-	// to ensure it is fully compatible with dns (punycode)
-	MaxNameLength = 63
-
-	// MaxAddrLength is the maximum length of an ip address
-	// 16 bytes for an ipv6 address
-	MaxAddrLength = 16
+	// MaxNameLength is limited to a maximum realistic DNS domain name to help facilitate DNS systems
+	MaxNameLength = 253
 
 	// MaxSubnetLength is the maximum length a subnet value can be.
 	// 16 bytes for an ipv6 address + 1 byte for the prefix length
-	MaxSubnetLength = MaxAddrLength + 1
-
-	// MaxAddresses is the maximum number of ip addresses allowed in a certificate
-	//TODO: If 2 is the number then its better to have discrete fields in asn1
-	// 2 would be to support a single v4 and v6 address per host
-	MaxAddresses = 2
-
-	// MaxSubnets is the maximum number of subnets allowed in a certificate
-	MaxSubnets = 1024
-
-	// MaxGroups is the maximum number of groups allowed in a certificate
-	MaxGroups = 1024
-
-	// MaxGroupLength is the maximum length of any given group
-	//TODO: we may want to follow dns limits here as well
-	MaxGroupLength = 1024
-
-	//TODO: other fields still need a max value
+	MaxSubnetLength = 17
 )
 
 type Certificate struct {
@@ -67,6 +45,7 @@ type Certificate struct {
 	// This is to benefit forwards compatibility in signature checking.
 	// signature(RawDetails + PublicKey) == Signature
 	RawDetails []byte
+	Curve      Curve
 	PublicKey  []byte
 	Signature  []byte
 
@@ -74,11 +53,12 @@ type Certificate struct {
 }
 
 func UnmarshalCertificate(b []byte, skipKey bool) (*Certificate, error) {
-	input := cryptobyte.String(b)
-	if len(input) == 0 {
+	l := len(b)
+	if l == 0 || l > MaxCertificateSize {
 		return nil, ErrBadFormat
 	}
 
+	input := cryptobyte.String(b)
 	// Open the envelope
 	if !input.ReadASN1(&input, asn1.SEQUENCE) || input.Empty() {
 		return nil, ErrBadFormat
@@ -90,6 +70,11 @@ func UnmarshalCertificate(b []byte, skipKey bool) (*Certificate, error) {
 		return nil, ErrBadFormat
 	}
 
+	var curve Curve
+	if !input.ReadOptionalASN1Integer(&curve, TagCertCurve, CURVE25519) {
+		return nil, ErrBadFormat
+	}
+
 	// Maybe grab the public key
 	var rawPublicKey cryptobyte.String
 	if skipKey {
@@ -98,7 +83,6 @@ func UnmarshalCertificate(b []byte, skipKey bool) (*Certificate, error) {
 
 	} else {
 		// We expect a public key to be present
-		//TODO: check length, this also doesnt work as expected ith the skipKey
 		if !input.ReadASN1(&rawPublicKey, TagCertPublicKey) || rawPublicKey.Empty() {
 			return nil, ErrBadFormat
 		}
@@ -106,13 +90,13 @@ func UnmarshalCertificate(b []byte, skipKey bool) (*Certificate, error) {
 
 	// Grab the signature
 	var rawSignature cryptobyte.String
-	//TODO: check length
 	if !input.ReadASN1(&rawSignature, TagCertSignature) || rawSignature.Empty() {
 		return nil, ErrBadFormat
 	}
 
 	return &Certificate{
 		RawDetails: rawDetails,
+		Curve:      curve,
 		PublicKey:  rawPublicKey,
 		Signature:  rawSignature,
 	}, nil
@@ -154,13 +138,10 @@ type Details struct {
 	Ips       []netip.Addr
 	Subnets   []netip.Prefix
 	Groups    []string
+	IsCA      bool
 	NotBefore time.Time
 	NotAfter  time.Time
-	Issuer    string
-	//TODO: Curve would be better as a property of the public key but noise would get upset since the key length would
-	// be longer than expected. If we want to do any sanity checking on the public key matching the curve then we have
-	// to unmarshal the details before we can accomplish that
-	Curve Curve
+	Issuer    []byte
 }
 
 func unmarshalDetails(b cryptobyte.String) (*Details, error) {
@@ -175,7 +156,7 @@ func unmarshalDetails(b cryptobyte.String) (*Details, error) {
 		return nil, ErrBadFormat
 	}
 
-	// Read the ips
+	// Read the ip addresses
 	var subString cryptobyte.String
 	if !b.ReadASN1(&subString, TagDetailsIps) || subString.Empty() {
 		return nil, ErrBadFormat
@@ -184,12 +165,7 @@ func unmarshalDetails(b cryptobyte.String) (*Details, error) {
 	var ips []netip.Addr
 	var val cryptobyte.String
 	for !subString.Empty() {
-		if len(ips) == MaxAddresses {
-			// There are still bytes left to process and we are at max
-			return nil, ErrBadFormat
-		}
-
-		if !subString.ReadASN1(&val, asn1.OCTET_STRING) || val.Empty() || len(val) > MaxAddrLength {
+		if !subString.ReadASN1(&val, asn1.OCTET_STRING) || val.Empty() {
 			return nil, ErrBadFormat
 		}
 
@@ -200,8 +176,8 @@ func unmarshalDetails(b cryptobyte.String) (*Details, error) {
 		ips = append(ips, ip)
 	}
 
-	// Make sure we have at least 1 ip address
-	if len(ips) < 1 {
+	if len(ips) == 0 {
+		// We had the ips field present but no ips were found
 		return nil, ErrBadFormat
 	}
 
@@ -214,11 +190,6 @@ func unmarshalDetails(b cryptobyte.String) (*Details, error) {
 	var subnets []netip.Prefix
 	if found {
 		for !subString.Empty() {
-			if len(subnets) == MaxSubnets {
-				// There are still bytes left to process and we are at max
-				return nil, ErrBadFormat
-			}
-
 			if !subString.ReadASN1(&val, asn1.OCTET_STRING) || val.Empty() || len(val) > MaxSubnetLength {
 				return nil, ErrBadFormat
 			}
@@ -228,6 +199,11 @@ func unmarshalDetails(b cryptobyte.String) (*Details, error) {
 				return nil, ErrBadFormat
 			}
 			subnets = append(subnets, subnet)
+		}
+
+		if len(subnets) == 0 {
+			// We had the subnets field present but no subnets were found
+			return nil, ErrBadFormat
 		}
 	}
 
@@ -239,39 +215,40 @@ func unmarshalDetails(b cryptobyte.String) (*Details, error) {
 	var groups []string
 	if found {
 		for !subString.Empty() {
-			if len(groups) == MaxSubnets {
-				// There are still bytes left to process and we are at max
-				return nil, ErrBadFormat
-			}
-
-			if !subString.ReadASN1(&val, asn1.UTF8String) || val.Empty() || len(val) > MaxGroupLength {
+			if !subString.ReadASN1(&val, asn1.UTF8String) || val.Empty() {
 				return nil, ErrBadFormat
 			}
 			groups = append(groups, string(val))
 		}
+
+		if len(groups) == 0 {
+			// We had the groups field present but no groups were found
+			return nil, ErrBadFormat
+		}
+	}
+
+	// Read out IsCA
+	var isCa bool
+	if !b.ReadOptionalASN1Boolean(&isCa, TagDetailsIsCA, false) {
+		return nil, ErrBadFormat
 	}
 
 	// Read not before and not after
-	//TODO: enforce limits
 	var notBefore int64
 	if !b.ReadASN1Int64WithTag(&notBefore, TagDetailsNotBefore) {
 		return nil, ErrBadFormat
 	}
 
-	//TODO: enforce limits
 	var notAfter int64
 	if !b.ReadASN1Int64WithTag(&notAfter, TagDetailsNotAfter) {
 		return nil, ErrBadFormat
 	}
 
 	// Read issuer
-	//TODO: enforce limits
 	var issuer cryptobyte.String
 	if !b.ReadASN1(&issuer, TagDetailsIssuer) || issuer.Empty() {
 		return nil, ErrBadFormat
 	}
-
-	//TODO: curve and enforce limits
 
 	return &Details{
 		Name:      string(name),
@@ -280,8 +257,7 @@ func unmarshalDetails(b cryptobyte.String) (*Details, error) {
 		Groups:    groups,
 		NotBefore: time.Unix(notBefore, 0),
 		NotAfter:  time.Unix(notAfter, 0),
-		Issuer:    hex.EncodeToString(issuer),
-		Curve:     CURVE25519, //TODO
+		Issuer:    issuer,
 	}, nil
 }
 
@@ -297,20 +273,23 @@ func (d *Details) Marshal() ([]byte, error) {
 			b.AddBytes([]byte(d.Name))
 		})
 
-		// Add the ips if any exist
-		if len(d.Ips) > 0 {
-			b.AddASN1(TagDetailsIps, func(b *cryptobyte.Builder) {
-				for _, subnet := range d.Ips {
-					sb, innerErr := subnet.MarshalBinary()
-					if innerErr != nil {
-						// MarshalBinary never returns an error
-						err = fmt.Errorf("unable to marshal ip: %w", err)
-						return
-					}
-					b.AddASN1OctetString(sb)
-				}
-			})
+		// Add the ips
+		if len(d.Ips) == 0 {
+			//TODO: this is an error
+			//TODO: in general do we want to refuse to marshal an invalid certificate?
 		}
+
+		b.AddASN1(TagDetailsIps, func(b *cryptobyte.Builder) {
+			for _, subnet := range d.Ips {
+				sb, innerErr := subnet.MarshalBinary()
+				if innerErr != nil {
+					// MarshalBinary never returns an error
+					err = fmt.Errorf("unable to marshal ip: %w", err)
+					return
+				}
+				b.AddASN1OctetString(sb)
+			}
+		})
 
 		// Add the subnets if any exist
 		if len(d.Subnets) > 0 {
@@ -338,6 +317,13 @@ func (d *Details) Marshal() ([]byte, error) {
 			})
 		}
 
+		// Add IsCA only if true
+		if d.IsCA {
+			b.AddASN1(TagDetailsIsCA, func(b *cryptobyte.Builder) {
+				b.AddUint8(0xff)
+			})
+		}
+
 		// Add not before
 		b.AddASN1Int64WithTag(d.NotBefore.Unix(), TagDetailsNotBefore)
 
@@ -345,17 +331,9 @@ func (d *Details) Marshal() ([]byte, error) {
 		b.AddASN1Int64WithTag(d.NotAfter.Unix(), TagDetailsNotAfter)
 
 		// Add the issuer
-		var h []byte
-		h, err = hex.DecodeString(d.Issuer) //TODO: there is probably a better way to avoid building this intermediate slice
-		if err != nil {
-			//TODO: might want to wrap this
-			return
-		}
 		b.AddASN1(TagDetailsIssuer, func(b *cryptobyte.Builder) {
-			b.AddBytes(h)
+			b.AddBytes(d.Issuer)
 		})
-
-		//TODO: Curve
 	})
 
 	if err != nil {

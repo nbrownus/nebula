@@ -1,6 +1,6 @@
 package v2
 
-type Curve uint32
+type Curve byte
 
 const (
 	CURVE25519 Curve = 0
