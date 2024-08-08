@@ -1,4 +1,4 @@
-package cert
+package v1
 
 import (
 	"crypto/ecdh"

@@ -4,7 +4,7 @@
 // 	protoc        v3.21.5
 // source: cert.proto
 
-package cert
+package v1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
